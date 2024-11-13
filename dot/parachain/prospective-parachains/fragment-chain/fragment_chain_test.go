@@ -7,6 +7,7 @@ import (
 	inclusionemulator "github.com/ChainSafe/gossamer/dot/parachain/util/inclusion-emulator"
 	"github.com/ChainSafe/gossamer/lib/common"
 	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/btree"
 )
 
 func TestCandidateStorage_RemoveCandidate(t *testing.T) {
@@ -65,7 +66,7 @@ func TestCandidateStorage_MarkBacked(t *testing.T) {
 	storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
 	storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
 
-	storage.MarkBacked(candidateHash)
+	storage.markBacked(candidateHash)
 
 	assert.Equal(t, Backed, entry.state, "candidate state should be marked as backed")
 }
@@ -171,7 +172,7 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 		tt := tt
 		t.Run(name, func(t *testing.T) {
 			storage := tt.setup()
-			result := storage.HeadDataByHash(tt.hash)
+			result := storage.headDataByHash(tt.hash)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -242,10 +243,73 @@ func TestCandidateStorage_PossibleBackedParaChildren(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			storage := tt.setup()
 			var result []*CandidateEntry
-			for entry := range storage.PossibleBackedParaChildren(tt.hash) {
+			for entry := range storage.possibleBackedParaChildren(tt.hash) {
 				result = append(result, entry)
 			}
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestEarliestRelayParent(t *testing.T) {
+	tests := map[string]struct {
+		setup  func() *Scope
+		expect inclusionemulator.RelayChainBlockInfo
+	}{
+		"returns from ancestors": {
+			setup: func() *Scope {
+				relayParent := inclusionemulator.RelayChainBlockInfo{
+					Hash:   common.Hash{0x01},
+					Number: 10,
+				}
+				baseConstraints := parachaintypes.Constraints{
+					MinRelayParentNumber: 5,
+				}
+				ancestor := inclusionemulator.RelayChainBlockInfo{
+					Hash:   common.Hash{0x02},
+					Number: 9,
+				}
+				ancestorsMap := btree.NewMap[uint, inclusionemulator.RelayChainBlockInfo](100)
+				ancestorsMap.Set(ancestor.Number, ancestor)
+				return &Scope{
+					relayParent:     relayParent,
+					baseConstraints: baseConstraints,
+					ancestors:       ancestorsMap,
+				}
+			},
+			expect: inclusionemulator.RelayChainBlockInfo{
+				Hash:   common.Hash{0x02},
+				Number: 9,
+			},
+		},
+		"returns relayParent": {
+			setup: func() *Scope {
+				relayParent := inclusionemulator.RelayChainBlockInfo{
+					Hash:   common.Hash{0x01},
+					Number: 10,
+				}
+				baseConstraints := parachaintypes.Constraints{
+					MinRelayParentNumber: 5,
+				}
+				return &Scope{
+					relayParent:     relayParent,
+					baseConstraints: baseConstraints,
+					ancestors:       btree.NewMap[uint, inclusionemulator.RelayChainBlockInfo](100),
+				}
+			},
+			expect: inclusionemulator.RelayChainBlockInfo{
+				Hash:   common.Hash{0x01},
+				Number: 10,
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		tt := tt
+		t.Run(name, func(t *testing.T) {
+			scope := tt.setup()
+			result := scope.EarliestRelayParent()
+			assert.Equal(t, tt.expect, result)
 		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	inclusionemulator "github.com/ChainSafe/gossamer/dot/parachain/util/inclusion-emulator"
 	"github.com/ChainSafe/gossamer/lib/common"
+	"github.com/tidwall/btree"
 )
 
 type CandidateState int
@@ -16,6 +17,8 @@ const (
 	Backed
 )
 
+// CandidateEntry represents a candidate into the CandidateStorage
+// TODO: Should CandidateEntry implements `HypotheticalOrConcreteCandidate`
 type CandidateEntry struct {
 	candidateHash      parachaintypes.CandidateHash
 	parentHeadDataHash common.Hash
@@ -97,6 +100,11 @@ func (c *CandidateStorage) AddPendingAvailabilityCandidate(
 	return c.addCandidateEntry(entry)
 }
 
+// Len return the number of stored candidate
+func (c *CandidateStorage) Len() uint {
+	return uint(len(c.byCandidateHash))
+}
+
 func (c *CandidateStorage) addCandidateEntry(candidate *CandidateEntry) error {
 	_, ok := c.byCandidateHash[candidate.candidateHash]
 	if ok {
@@ -147,7 +155,7 @@ func (c *CandidateStorage) removeCandidate(candidateHash parachaintypes.Candidat
 	}
 }
 
-func (c *CandidateStorage) MarkBacked(candidateHash parachaintypes.CandidateHash) {
+func (c *CandidateStorage) markBacked(candidateHash parachaintypes.CandidateHash) {
 	entry, ok := c.byCandidateHash[candidateHash]
 	if !ok {
 		fmt.Println("candidate not found while marking as backed")
@@ -157,13 +165,13 @@ func (c *CandidateStorage) MarkBacked(candidateHash parachaintypes.CandidateHash
 	fmt.Println("candidate marked as backed")
 }
 
-func (c *CandidateStorage) Contains(candidateHash parachaintypes.CandidateHash) bool {
+func (c *CandidateStorage) contains(candidateHash parachaintypes.CandidateHash) bool {
 	_, ok := c.byCandidateHash[candidateHash]
 	return ok
 }
 
-// Candidates returns an iterator over references to the stored candidates, in arbitrary order.
-func (c *CandidateStorage) Candidates() iter.Seq[*CandidateEntry] {
+// candidates returns an iterator over references to the stored candidates, in arbitrary order.
+func (c *CandidateStorage) candidates() iter.Seq[*CandidateEntry] {
 	return func(yield func(*CandidateEntry) bool) {
 		for _, entry := range c.byCandidateHash {
 			if !yield(entry) {
@@ -173,7 +181,7 @@ func (c *CandidateStorage) Candidates() iter.Seq[*CandidateEntry] {
 	}
 }
 
-func (c *CandidateStorage) HeadDataByHash(hash common.Hash) *parachaintypes.HeadData {
+func (c *CandidateStorage) headDataByHash(hash common.Hash) *parachaintypes.HeadData {
 	// first, search for candidates outputting this head data and extract the head data
 	// from their commitments if they exist.
 	// otherwise, search for candidates building upon this head data and extract the
@@ -198,7 +206,7 @@ func (c *CandidateStorage) HeadDataByHash(hash common.Hash) *parachaintypes.Head
 	return nil
 }
 
-func (c *CandidateStorage) PossibleBackedParaChildren(parentHeadHash common.Hash) iter.Seq[*CandidateEntry] {
+func (c *CandidateStorage) possibleBackedParaChildren(parentHeadHash common.Hash) iter.Seq[*CandidateEntry] {
 	return func(yield func(*CandidateEntry) bool) {
 		seqOfCandidateHashes, ok := c.byParentHead[parentHeadHash]
 		if !ok {
@@ -213,4 +221,117 @@ func (c *CandidateStorage) PossibleBackedParaChildren(parentHeadHash common.Hash
 			}
 		}
 	}
+}
+
+// PendindAvailability is a candidate on-chain but pending availability, for special
+// treatment in the `Scope`
+type PendindAvailability struct {
+	CandidateHash parachaintypes.CandidateHash
+	RelayParent   inclusionemulator.RelayChainBlockInfo
+}
+
+// The scope of a fragment chain
+type Scope struct {
+	// the relay parent we're currently building on top of
+	relayParent inclusionemulator.RelayChainBlockInfo
+	// the other relay parents candidates are allowed to build upon,
+	// mapped by the block number
+	ancestors *btree.Map[uint, inclusionemulator.RelayChainBlockInfo]
+	// the other relay parents candidates are allowed to build upon,
+	// mapped by hash
+	ancestorsByHash map[common.Hash]inclusionemulator.RelayChainBlockInfo
+	// candidates pending availability at this block
+	pendindAvailability []*PendindAvailability
+	// the base constraints derived from the latest included candidate
+	baseConstraints parachaintypes.Constraints
+	// equal to `max_candidate_depth`
+	maxDepth uint
+}
+
+// NewScopeWithAncestors defines a new scope, all arguments are straightforward
+// expect ancestors. Ancestor should be in reverse order, starting with the parent
+// of the relayParent, and proceeding backwards in block number decrements of 1.
+// Ancestors not following these conditions will be rejected.
+//
+// This function will only consume ancestors up to the `MinRelayParentNumber` of the
+// `baseConstraints`.
+//
+// Only ancestor whose children have the same session id as the relay parent's children
+// should be provided. It is allowed to provide 0 ancestors.
+func NewScopeWithAncestors(
+	relayParent inclusionemulator.RelayChainBlockInfo,
+	baseConstraints parachaintypes.Constraints,
+	pendingAvailability []*PendindAvailability,
+	maxDepth uint,
+	ancestors iter.Seq[inclusionemulator.RelayChainBlockInfo],
+) (*Scope, error) {
+	ancestorsMap := btree.NewMap[uint, inclusionemulator.RelayChainBlockInfo](100)
+	ancestorsByHash := make(map[common.Hash]inclusionemulator.RelayChainBlockInfo)
+
+	prev := relayParent.Number
+	for ancestor := range ancestors {
+		if prev == 0 {
+			return nil, ErrUnexpectedAncestor{Number: ancestor.Number, Prev: prev}
+		}
+
+		if ancestor.Number != prev-1 {
+			return nil, ErrUnexpectedAncestor{Number: ancestor.Number, Prev: prev}
+		}
+
+		if prev == baseConstraints.MinRelayParentNumber {
+			break
+		}
+
+		prev = ancestor.Number
+		ancestorsByHash[ancestor.Hash] = ancestor
+		ancestorsMap.Set(ancestor.Number, ancestor)
+	}
+
+	return &Scope{
+		relayParent:         relayParent,
+		baseConstraints:     baseConstraints,
+		pendindAvailability: pendingAvailability,
+		maxDepth:            maxDepth,
+		ancestors:           ancestorsMap,
+		ancestorsByHash:     ancestorsByHash,
+	}, nil
+}
+
+// EarliestRelayParent gets the earliest relay-parent allowed in the scope of the fragment chain.
+func (s *Scope) EarliestRelayParent() inclusionemulator.RelayChainBlockInfo {
+	if iter := s.ancestors.Iter(); iter.Next() {
+		return iter.Value()
+	}
+	return s.relayParent
+}
+
+// Ancestor gets the relay ancestor of the fragment chain by hash.
+func (s *Scope) Ancestor(hash common.Hash) *inclusionemulator.RelayChainBlockInfo {
+	if hash == s.relayParent.Hash {
+		return &s.relayParent
+	}
+
+	if blockInfo, ok := s.ancestorsByHash[hash]; ok {
+		return &blockInfo
+	}
+
+	return nil
+}
+
+// Whether the candidate in question is one pending availability in this scope.
+func (s *Scope) GetPendingAvailability(candidateHash parachaintypes.CandidateHash) *PendindAvailability {
+	for _, c := range s.pendindAvailability {
+		if c.CandidateHash == candidateHash {
+			return c
+		}
+	}
+	return nil
+}
+
+type FragmentNode struct {
+	fragment                inclusionemulator.Fragment
+	candidateHash           parachaintypes.CandidateHash
+	cumulativeModifications inclusionemulator.ConstraintModifications
+	parentHeadDataHash      common.Hash
+	outputHeadDataHash      common.Hash
 }

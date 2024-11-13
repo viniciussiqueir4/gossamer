@@ -739,3 +739,16 @@ type Subsystem interface {
 	ProcessBlockFinalizedSignal(BlockFinalizedSignal) error
 	Stop()
 }
+
+// UpgradeRestriction a possible restriction that prevents a parachain
+// from performing an upgrade
+// TODO: should be scale encoded/decoded
+type UpgradeRestriction interface {
+	isUpgradeRestriction()
+}
+
+var _ UpgradeRestriction = (*Present)(nil)
+
+type Present struct{}
+
+func (*Present) isUpgradeRestriction() {}

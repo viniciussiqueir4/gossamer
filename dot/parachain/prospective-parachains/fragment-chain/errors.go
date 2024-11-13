@@ -70,3 +70,14 @@ func (e ErrRelayParentNotInScope) Error() string {
 	return fmt.Sprintf("relay parent %x not in scope, earliest relay parent allowed %x",
 		e.relayParentA, e.relayParentB)
 }
+
+type ErrUnexpectedAncestor struct {
+	// The block number that this error occurred at
+	Number uint
+	// The previous seen block number, which did not match `number`.
+	Prev uint
+}
+
+func (e ErrUnexpectedAncestor) Error() string {
+	return fmt.Sprintf("unexpected ancestor %d, expected %d", e.Number, e.Prev)
+}
