@@ -313,3 +313,109 @@ func TestEarliestRelayParent(t *testing.T) {
 		})
 	}
 }
+
+func TestBackedChain_RevertToParentHash(t *testing.T) {
+	tests := map[string]struct {
+		setup                    func() *BackedChain
+		hash                     common.Hash
+		expectedChainSize        int
+		expectedRemovedFragments int
+	}{
+		"revert_to_parent_at_pos_2": {
+			setup: func() *BackedChain {
+				chain := &BackedChain{
+					chain:        make([]*FragmentNode, 0),
+					byParentHead: make(map[common.Hash]parachaintypes.CandidateHash),
+					byOutputHead: make(map[common.Hash]parachaintypes.CandidateHash),
+					candidates:   make(map[parachaintypes.CandidateHash]struct{}),
+				}
+
+				for i := 0; i < 5; i++ {
+					node := &FragmentNode{
+						candidateHash:           parachaintypes.CandidateHash{Value: common.Hash{byte(i)}},
+						parentHeadDataHash:      common.Hash{byte(i)},
+						outputHeadDataHash:      common.Hash{byte(i + 1)},
+						cumulativeModifications: inclusionemulator.ConstraintModifications{},
+					}
+					chain.Push(*node)
+				}
+				return chain
+			},
+			hash:                     common.Hash{3},
+			expectedChainSize:        3,
+			expectedRemovedFragments: 2,
+		},
+		"revert_to_parent_at_pos_0": {
+			setup: func() *BackedChain {
+				chain := &BackedChain{
+					chain:        make([]*FragmentNode, 0),
+					byParentHead: make(map[common.Hash]parachaintypes.CandidateHash),
+					byOutputHead: make(map[common.Hash]parachaintypes.CandidateHash),
+					candidates:   make(map[parachaintypes.CandidateHash]struct{}),
+				}
+
+				for i := 0; i < 2; i++ {
+					node := &FragmentNode{
+						candidateHash:           parachaintypes.CandidateHash{Value: common.Hash{byte(i)}},
+						parentHeadDataHash:      common.Hash{byte(i)},
+						outputHeadDataHash:      common.Hash{byte(i + 1)},
+						cumulativeModifications: inclusionemulator.ConstraintModifications{},
+					}
+					chain.Push(*node)
+				}
+				return chain
+			},
+			hash:                     common.Hash{1},
+			expectedChainSize:        1,
+			expectedRemovedFragments: 1,
+		},
+		"no_node_removed": {
+			setup: func() *BackedChain {
+				chain := &BackedChain{
+					chain:        make([]*FragmentNode, 0),
+					byParentHead: make(map[common.Hash]parachaintypes.CandidateHash),
+					byOutputHead: make(map[common.Hash]parachaintypes.CandidateHash),
+					candidates:   make(map[parachaintypes.CandidateHash]struct{}),
+				}
+
+				for i := 0; i < 3; i++ {
+					node := &FragmentNode{
+						candidateHash:           parachaintypes.CandidateHash{Value: common.Hash{byte(i)}},
+						parentHeadDataHash:      common.Hash{byte(i)},
+						outputHeadDataHash:      common.Hash{byte(i + 1)},
+						cumulativeModifications: inclusionemulator.ConstraintModifications{},
+					}
+					chain.Push(*node)
+				}
+				return chain
+			},
+			hash:                     common.Hash{99}, // Non-existent hash
+			expectedChainSize:        3,
+			expectedRemovedFragments: 0,
+		},
+	}
+
+	for name, tt := range tests {
+		tt := tt
+		t.Run(name, func(t *testing.T) {
+			backedChain := tt.setup()
+			removedNodes := backedChain.RevertToParentHash(tt.hash)
+
+			// Check the number of removed nodes
+			assert.Equal(t, tt.expectedRemovedFragments, len(removedNodes))
+
+			// Check the properties of the chain
+			assert.Equal(t, tt.expectedChainSize, len(backedChain.chain))
+			assert.Equal(t, tt.expectedChainSize, len(backedChain.byParentHead))
+			assert.Equal(t, tt.expectedChainSize, len(backedChain.byOutputHead))
+			assert.Equal(t, tt.expectedChainSize, len(backedChain.candidates))
+
+			// Check that the remaining nodes are correct
+			for i := 0; i < len(backedChain.chain); i++ {
+				assert.Contains(t, backedChain.byParentHead, common.Hash{byte(i)})
+				assert.Contains(t, backedChain.byOutputHead, common.Hash{byte(i + 1)})
+				assert.Contains(t, backedChain.candidates, parachaintypes.CandidateHash{Value: common.Hash{byte(i)}})
+			}
+		})
+	}
+}

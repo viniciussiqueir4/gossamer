@@ -3,6 +3,7 @@ package fragmentchain
 import (
 	"fmt"
 	"iter"
+	"slices"
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	inclusionemulator "github.com/ChainSafe/gossamer/dot/parachain/util/inclusion-emulator"
@@ -328,10 +329,99 @@ func (s *Scope) GetPendingAvailability(candidateHash parachaintypes.CandidateHas
 	return nil
 }
 
+// Fragment node is a node that belongs to a `BackedChain`. It holds constraints based on
+// the ancestors in the chain
 type FragmentNode struct {
 	fragment                inclusionemulator.Fragment
 	candidateHash           parachaintypes.CandidateHash
 	cumulativeModifications inclusionemulator.ConstraintModifications
 	parentHeadDataHash      common.Hash
 	outputHeadDataHash      common.Hash
+}
+
+func (f *FragmentNode) relayParent() common.Hash {
+	return f.fragment.RelayParent().Hash
+}
+
+// NewCandidateEntryFromFragment creates a candidate entry from a fragment, we dont need
+// to perform the checks done in `NewCandidateEntry` since a `FragmentNode` always comes
+// from a `CandidateEntry`
+func NewCandidateEntryFromFragment(node *FragmentNode) *CandidateEntry {
+	return &CandidateEntry{
+		candidateHash:      node.candidateHash,
+		parentHeadDataHash: node.parentHeadDataHash,
+		outputHeadDataHash: node.outputHeadDataHash,
+		candidate:          node.fragment.Candidate(),
+		relayParent:        node.relayParent(),
+		// a fragment node is always backed
+		state: Backed,
+	}
+}
+
+// BackedChain is a chain of backed/backable candidates
+// Includes candidates pending availability and candidates which may be backed on-chain
+type BackedChain struct {
+	// holds the candidate chain
+	chain []*FragmentNode
+
+	// index from parent head data to the candidate that has that head data as parent
+	// only contains the candidates present in the `chain`
+	byParentHead map[common.Hash]parachaintypes.CandidateHash
+
+	// index from head data hash to the candidate hash outputting that head data
+	// only contains the candidates present in the `chain`
+	byOutputHead map[common.Hash]parachaintypes.CandidateHash
+
+	// a set of candidate hashes in the `chain`
+	candidates map[parachaintypes.CandidateHash]struct{}
+}
+
+func (bc *BackedChain) Push(candidate FragmentNode) {
+	bc.candidates[candidate.candidateHash] = struct{}{}
+	bc.byParentHead[candidate.parentHeadDataHash] = candidate.candidateHash
+	bc.byOutputHead[candidate.outputHeadDataHash] = candidate.candidateHash
+	bc.chain = append(bc.chain, &candidate)
+}
+
+func (bc *BackedChain) Clear() []*FragmentNode {
+	bc.byParentHead = make(map[common.Hash]parachaintypes.CandidateHash)
+	bc.byOutputHead = make(map[common.Hash]parachaintypes.CandidateHash)
+	bc.candidates = make(map[parachaintypes.CandidateHash]struct{})
+
+	oldChain := bc.chain
+	bc.chain = nil
+	return oldChain
+}
+
+func (bc *BackedChain) RevertToParentHash(parentHeadDataHash common.Hash) []*FragmentNode {
+	foundIndex := -1
+
+	for i := 0; i < len(bc.chain); i++ {
+		node := bc.chain[i]
+
+		if foundIndex != -1 {
+			delete(bc.byParentHead, node.parentHeadDataHash)
+			delete(bc.byOutputHead, node.outputHeadDataHash)
+			delete(bc.candidates, node.candidateHash)
+		} else if node.outputHeadDataHash == parentHeadDataHash {
+			foundIndex = i
+		}
+	}
+
+	if foundIndex != -1 {
+		// drain the elements from the found index until
+		// the end of the slice and return them
+		removed := make([]*FragmentNode, len(bc.chain)-(foundIndex+1))
+		copy(removed, bc.chain[foundIndex+1:])
+		bc.chain = slices.Delete(bc.chain, foundIndex+1, len(bc.chain))
+
+		return removed
+	}
+
+	return nil
+}
+
+func (bc *BackedChain) Contains(hash parachaintypes.CandidateHash) bool {
+	_, ok := bc.candidates[hash]
+	return ok
 }

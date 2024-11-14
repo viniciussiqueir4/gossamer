@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	"github.com/ChainSafe/gossamer/lib/common"
+	"github.com/ethereum/go-ethereum/common/math"
 )
 
 // ProspectiveCandidate includes key informations that represents a candidate
@@ -203,6 +205,69 @@ type Constraints struct {
 	FutureValidationCode *FutureValidationCode
 }
 
+func (c *Constraints) CheckModifications(modifications *ConstraintModifications) error {
+	if modifications.HrmpWatermark != nil && modifications.HrmpWatermark.Type == Trunk {
+		if !slices.Contains(c.HrmpInbound.ValidWatermarks, modifications.HrmpWatermark.Watermark()) {
+			return &ErrDisallowedHrmpWatermark{blockNumber: modifications.HrmpWatermark.Watermark()}
+		}
+	}
+
+	for id, outboundHrmpMod := range modifications.OutboundHrmp {
+		outbound, ok := c.HrmpChannelsOut[id]
+		if !ok {
+			return &ErrNoSuchHrmpChannel{paraId: id}
+		}
+
+		_, overflow := math.SafeSub(uint64(outbound.BytesRemaining), uint64(outboundHrmpMod.BytesSubmitted))
+		if overflow {
+			return &ErrHrmpBytesOverflow{
+				paraId:         id,
+				bytesRemaining: outbound.BytesRemaining,
+				bytesSubmitted: outboundHrmpMod.BytesSubmitted,
+			}
+		}
+
+		_, overflow = math.SafeSub(uint64(outbound.MessagesRemaining), uint64(outboundHrmpMod.MessagesSubmitted))
+		if overflow {
+			return &ErrHrmpMessagesOverflow{
+				paraId:            id,
+				messagesRemaining: outbound.MessagesRemaining,
+				messagesSubmitted: outboundHrmpMod.MessagesSubmitted,
+			}
+		}
+	}
+
+	_, overflow := math.SafeSub(uint64(c.UmpRemaining), uint64(modifications.UmpMessagesSent))
+	if overflow {
+		return &ErrUmpMessagesOverflow{
+			messagesRemaining: c.UmpRemaining,
+			messagesSubmitted: modifications.UmpMessagesSent,
+		}
+	}
+
+	_, overflow = math.SafeSub(uint64(c.UmpRemainingBytes), uint64(modifications.UmpBytesSent))
+	if overflow {
+		return &ErrUmpBytesOverflow{
+			bytesRemaining: c.UmpRemainingBytes,
+			bytesSubmitted: modifications.UmpBytesSent,
+		}
+	}
+
+	_, overflow = math.SafeSub(uint64(len(c.DmpRemainingMessages)), uint64(modifications.DmpMessagesProcessed))
+	if overflow {
+		return &ErrDmpMessagesUnderflow{
+			messagesRemaining: uint(len(c.DmpRemainingMessages)),
+			messagesProcessed: modifications.DmpMessagesProcessed,
+		}
+	}
+
+	if c.FutureValidationCode == nil && modifications.CodeUpgradeApplied {
+		return ErrAppliedNonexistentCodeUpgrade
+	}
+
+	return nil
+}
+
 func FromPrimitiveConstraints(pc parachaintypes.Constraints) *Constraints {
 	hrmpChannelsOut := make(map[parachaintypes.ParaID]OutboundHrmpChannelLimitations)
 	for k, v := range pc.HrmpChannelsOut {
@@ -348,9 +413,17 @@ func (cm *ConstraintModifications) Stack(other *ConstraintModifications) {
 // This is a type which guarantees that the candidate is valid under the operating constraints
 type Fragment struct {
 	relayParent          RelayChainBlockInfo
-	operatingConstraints Constraints
+	operatingConstraints *Constraints
 	candidate            ProspectiveCandidate
 	modifications        *ConstraintModifications
+}
+
+func (f *Fragment) RelayParent() RelayChainBlockInfo {
+	return f.relayParent
+}
+
+func (f *Fragment) Candidate() ProspectiveCandidate {
+	return f.candidate
 }
 
 // NewFragment creates a new Fragment. This fails if the fragment isnt in line
@@ -360,7 +433,7 @@ type Fragment struct {
 // small enough.
 func NewFragment(
 	relayParent RelayChainBlockInfo,
-	operatingConstraints Constraints,
+	operatingConstraints *Constraints,
 	candidate ProspectiveCandidate) (*Fragment, error) {
 	modifications, err := checkAgainstConstraints(
 		relayParent,
@@ -383,7 +456,7 @@ func NewFragment(
 
 func checkAgainstConstraints(
 	relayParent RelayChainBlockInfo,
-	operatingConstraints Constraints,
+	operatingConstraints *Constraints,
 	commitments parachaintypes.CandidateCommitments,
 	validationCodeHash parachaintypes.ValidationCodeHash,
 	persistedValidationData parachaintypes.PersistedValidationData,
@@ -474,4 +547,86 @@ func skipUmpSignals(upwardMessages []parachaintypes.UpwardMessage) iter.Seq[para
 			return
 		}
 	}
+}
+
+func validateAgainstConstraints(
+	constraints *Constraints,
+	relayParent RelayChainBlockInfo,
+	commitments parachaintypes.CandidateCommitments,
+	persistedValidationData parachaintypes.PersistedValidationData,
+	validationCodeHash parachaintypes.ValidationCodeHash,
+	modifications *ConstraintModifications,
+) error {
+	expectedPVD := parachaintypes.PersistedValidationData{
+		ParentHead:             constraints.RequiredParent,
+		RelayParentNumber:      uint32(relayParent.Number),
+		RelayParentStorageRoot: relayParent.StorageRoot,
+		MaxPovSize:             uint32(constraints.MaxPoVSize),
+	}
+
+	if !expectedPVD.Equal(persistedValidationData) {
+		return &ErrPersistedValidationDataMismatch{
+			expected: expectedPVD,
+			got:      persistedValidationData,
+		}
+	}
+
+	if constraints.ValidationCodeHash != validationCodeHash {
+		return &ErrValidationCodeMismatch{
+			expected: constraints.ValidationCodeHash,
+			got:      validationCodeHash,
+		}
+	}
+
+	if relayParent.Number < constraints.MinRelayParentNumber {
+		return &ErrRelayParentTooOld{
+			minAllowed: constraints.MinRelayParentNumber,
+			current:    relayParent.Number,
+		}
+	}
+
+	if commitments.NewValidationCode != nil {
+		switch constraints.UpgradeRestriction.(type) {
+		case *parachaintypes.Present:
+			return ErrCodeUpgradeRestricted
+		}
+	}
+
+	announcedCodeSize := 0
+	if commitments.NewValidationCode != nil {
+		announcedCodeSize = len(*commitments.NewValidationCode)
+	}
+
+	if uint(announcedCodeSize) > constraints.MaxCodeSize {
+		return &ErrCodeSizeTooLarge{
+			maxAllowed: constraints.MaxCodeSize,
+			newSize:    uint(announcedCodeSize),
+		}
+	}
+
+	if modifications.DmpMessagesProcessed == 0 {
+		if len(constraints.DmpRemainingMessages) > 0 && constraints.DmpRemainingMessages[0] <= relayParent.Number {
+			return ErrDmpAdvancementRule
+		}
+	}
+
+	if len(commitments.HorizontalMessages) > int(constraints.MaxHrmpNumPerCandidate) {
+		return &ErrHrmpMessagesPerCandidateOverflow{
+			messagesAllowed:   constraints.MaxHrmpNumPerCandidate,
+			messagesSubmitted: uint(len(commitments.HorizontalMessages)),
+		}
+	}
+
+	if modifications.UmpMessagesSent > constraints.MaxUmpNumPerCandidate {
+		return &ErrUmpMessagesPerCandidateOverflow{
+			messagesAllowed:   constraints.MaxUmpNumPerCandidate,
+			messagesSubmitted: modifications.UmpMessagesSent,
+		}
+	}
+
+	if err := constraints.CheckModifications(modifications); err != nil {
+		return &ErrOutputsInvalid{modificationError: err}
+	}
+
+	return nil
 }
