@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
-	inclusionemulator "github.com/ChainSafe/gossamer/dot/parachain/util/inclusion-emulator"
 	"github.com/ChainSafe/gossamer/lib/common"
 )
 
@@ -47,7 +46,7 @@ func (e ErrForkChoiceRule) Error() string {
 }
 
 type ErrComputeConstraints struct {
-	modificationErr inclusionemulator.ModificationError
+	modificationErr error
 }
 
 func (e ErrComputeConstraints) Error() string {
@@ -55,7 +54,7 @@ func (e ErrComputeConstraints) Error() string {
 }
 
 type ErrCheckAgainstConstraints struct {
-	fragmentValidityErr inclusionemulator.FragmentValidityError
+	fragmentValidityErr error
 }
 
 func (e ErrCheckAgainstConstraints) Error() string {

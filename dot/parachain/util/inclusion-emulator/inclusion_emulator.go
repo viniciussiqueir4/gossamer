@@ -1,7 +1,10 @@
 package inclusionemulator
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"iter"
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	"github.com/ChainSafe/gossamer/lib/common"
@@ -19,224 +22,142 @@ type ProspectiveCandidate struct {
 	ValidationCodeHash      parachaintypes.ValidationCodeHash
 }
 
-// ModificationError is kinds of errors that can happen when modifying constraints
-type ModificationError interface {
-	isModificationError()
-}
-
-var (
-	_ ModificationError = (*DisallowedHrmpWatermark)(nil)
-	_ ModificationError = (*NoSuchHrmpChannel)(nil)
-	_ ModificationError = (*HrmpMessagesOverflow)(nil)
-	_ ModificationError = (*HrmpBytesOverflow)(nil)
-	_ ModificationError = (*UmpMessagesOverflow)(nil)
-	_ ModificationError = (*UmpBytesOverflow)(nil)
-	_ ModificationError = (*DmpMessagesUnderflow)(nil)
-	_ ModificationError = (*AppliedNonexistentCodeUpgrade)(nil)
-)
-
-type DisallowedHrmpWatermark struct {
+type ErrDisallowedHrmpWatermark struct {
 	blockNumber uint
 }
 
-func (*DisallowedHrmpWatermark) isModificationError() {}
-
-func (e *DisallowedHrmpWatermark) String() string {
+func (e *ErrDisallowedHrmpWatermark) Error() string {
 	return fmt.Sprintf("DisallowedHrmpWatermark(BlockNumber: %d)", e.blockNumber)
 }
 
-type NoSuchHrmpChannel struct {
+type ErrNoSuchHrmpChannel struct {
 	paraId parachaintypes.ParaID
 }
 
-func (*NoSuchHrmpChannel) isModificationError() {}
-
-func (e *NoSuchHrmpChannel) String() string {
+func (e *ErrNoSuchHrmpChannel) Error() string {
 	return fmt.Sprintf("NoSuchHrmpChannel(ParaId: %d)", e.paraId)
 }
 
-type HrmpMessagesOverflow struct {
+type ErrHrmpMessagesOverflow struct {
 	paraId            parachaintypes.ParaID
 	messagesRemaining uint
 	messagesSubmitted uint
 }
 
-func (*HrmpMessagesOverflow) isModificationError() {}
-
-func (e *HrmpMessagesOverflow) String() string {
+func (e *ErrHrmpMessagesOverflow) Error() string {
 	return fmt.Sprintf("HrmpMessagesOverflow(ParaId: %d, MessagesRemaining: %d, MessagesSubmitted: %d)", e.paraId, e.messagesRemaining, e.messagesSubmitted)
 }
 
-type HrmpBytesOverflow struct {
+type ErrHrmpBytesOverflow struct {
 	paraId         parachaintypes.ParaID
 	bytesRemaining uint
 	bytesSubmitted uint
 }
 
-func (*HrmpBytesOverflow) isModificationError() {}
-
-func (e *HrmpBytesOverflow) String() string {
+func (e *ErrHrmpBytesOverflow) Error() string {
 	return fmt.Sprintf("HrmpBytesOverflow(ParaId: %d, BytesRemaining: %d, BytesSubmitted: %d)", e.paraId, e.bytesRemaining, e.bytesSubmitted)
 }
 
-type UmpMessagesOverflow struct {
+type ErrUmpMessagesOverflow struct {
 	messagesRemaining uint
 	messagesSubmitted uint
 }
 
-func (*UmpMessagesOverflow) isModificationError() {}
-
-func (e *UmpMessagesOverflow) String() string {
+func (e *ErrUmpMessagesOverflow) Error() string {
 	return fmt.Sprintf("UmpMessagesOverflow(MessagesRemaining: %d, MessagesSubmitted: %d)", e.messagesRemaining, e.messagesSubmitted)
 }
 
-type UmpBytesOverflow struct {
+type ErrUmpBytesOverflow struct {
 	bytesRemaining uint
 	bytesSubmitted uint
 }
 
-func (*UmpBytesOverflow) isModificationError() {}
-
-func (e *UmpBytesOverflow) String() string {
+func (e *ErrUmpBytesOverflow) Error() string {
 	return fmt.Sprintf("UmpBytesOverflow(BytesRemaining: %d, BytesSubmitted: %d)", e.bytesRemaining, e.bytesSubmitted)
 }
 
-type DmpMessagesUnderflow struct {
+type ErrDmpMessagesUnderflow struct {
 	messagesRemaining uint
 	messagesProcessed uint
 }
 
-func (*DmpMessagesUnderflow) isModificationError() {}
-
-func (e *DmpMessagesUnderflow) String() string {
+func (e *ErrDmpMessagesUnderflow) Error() string {
 	return fmt.Sprintf("DmpMessagesUnderflow(MessagesRemaining: %d, MessagesProcessed: %d)", e.messagesRemaining, e.messagesProcessed)
 }
 
-type AppliedNonexistentCodeUpgrade struct{}
-
-func (*AppliedNonexistentCodeUpgrade) isModificationError() {}
-
-func (e *AppliedNonexistentCodeUpgrade) String() string {
-	return "AppliedNonexistentCodeUpgrade()"
-}
-
-// FragmentValidityError kinds of errors with the validity of a fragment.
-type FragmentValidityError interface {
-	isFragmentValidityError()
-}
-
 var (
-	_ FragmentValidityError = (*ValidationCodeMismatch)(nil)
-	_ FragmentValidityError = (*PersistedValidationDataMismatch)(nil)
-	_ FragmentValidityError = (*OutputsInvalid)(nil)
-	_ FragmentValidityError = (*CodeSizeTooLarge)(nil)
-	_ FragmentValidityError = (*RelayParentTooOld)(nil)
-	_ FragmentValidityError = (*DmpAdvancementRule)(nil)
-	_ FragmentValidityError = (*UmpMessagesPerCandidateOverflow)(nil)
-	_ FragmentValidityError = (*HrmpMessagesPerCandidateOverflow)(nil)
-	_ FragmentValidityError = (*CodeUpgradeRestricted)(nil)
-	_ FragmentValidityError = (*HrmpMessagesDescendingOrDuplicate)(nil)
+	ErrAppliedNonexistentCodeUpgrade = errors.New("AppliedNonexistentCodeUpgrade()")
+	ErrDmpAdvancementRule            = errors.New("DmpAdvancementRule()")
+	ErrCodeUpgradeRestricted         = errors.New("CodeUpgradeRestricted()")
 )
 
-type ValidationCodeMismatch struct {
+type ErrValidationCodeMismatch struct {
 	expected parachaintypes.ValidationCodeHash
 	got      parachaintypes.ValidationCodeHash
 }
 
-func (*ValidationCodeMismatch) isFragmentValidityError() {}
-
-func (e *ValidationCodeMismatch) String() string {
+func (e *ErrValidationCodeMismatch) Error() string {
 	return fmt.Sprintf("ValidationCodeMismatch(Expected: %s, Got: %s)", e.expected, e.got)
 }
 
-type PersistedValidationDataMismatch struct {
+type ErrPersistedValidationDataMismatch struct {
 	expected parachaintypes.PersistedValidationData
 	got      parachaintypes.PersistedValidationData
 }
 
-func (*PersistedValidationDataMismatch) isFragmentValidityError() {}
-
-func (e *PersistedValidationDataMismatch) String() string {
+func (e *ErrPersistedValidationDataMismatch) Error() string {
 	return fmt.Sprintf("PersistedValidationDataMismatch(Expected: %v, Got: %v)", e.expected, e.got)
 }
 
-type OutputsInvalid struct {
-	modificationError ModificationError
+type ErrOutputsInvalid struct {
+	modificationError error
 }
 
-func (*OutputsInvalid) isFragmentValidityError() {}
-
-func (e *OutputsInvalid) String() string {
+func (e *ErrOutputsInvalid) Error() string {
 	return fmt.Sprintf("OutputsInvalid(ModificationError: %v)", e.modificationError)
 }
 
-type CodeSizeTooLarge struct {
+type ErrCodeSizeTooLarge struct {
 	maxAllowed uint
 	newSize    uint
 }
 
-func (*CodeSizeTooLarge) isFragmentValidityError() {}
-
-func (e *CodeSizeTooLarge) String() string {
+func (e *ErrCodeSizeTooLarge) Error() string {
 	return fmt.Sprintf("CodeSizeTooLarge(MaxAllowed: %d, NewSize: %d)", e.maxAllowed, e.newSize)
 }
 
-type RelayParentTooOld struct {
+type ErrRelayParentTooOld struct {
 	minAllowed uint
 	current    uint
 }
 
-func (*RelayParentTooOld) isFragmentValidityError() {}
-
-func (e *RelayParentTooOld) String() string {
+func (e *ErrRelayParentTooOld) Error() string {
 	return fmt.Sprintf("RelayParentTooOld(MinAllowed: %d, Current: %d)", e.minAllowed, e.current)
 }
 
-type DmpAdvancementRule struct{}
-
-func (*DmpAdvancementRule) isFragmentValidityError() {}
-
-func (e *DmpAdvancementRule) String() string {
-	return "DmpAdvancementRule()"
-}
-
-type UmpMessagesPerCandidateOverflow struct {
+type ErrUmpMessagesPerCandidateOverflow struct {
 	messagesAllowed   uint
 	messagesSubmitted uint
 }
 
-func (*UmpMessagesPerCandidateOverflow) isFragmentValidityError() {}
-
-func (e *UmpMessagesPerCandidateOverflow) String() string {
+func (e *ErrUmpMessagesPerCandidateOverflow) Error() string {
 	return fmt.Sprintf("UmpMessagesPerCandidateOverflow(MessagesAllowed: %d, MessagesSubmitted: %d)", e.messagesAllowed, e.messagesSubmitted)
 }
 
-type HrmpMessagesPerCandidateOverflow struct {
+type ErrHrmpMessagesPerCandidateOverflow struct {
 	messagesAllowed   uint
 	messagesSubmitted uint
 }
 
-func (*HrmpMessagesPerCandidateOverflow) isFragmentValidityError() {}
-
-func (e *HrmpMessagesPerCandidateOverflow) String() string {
+func (e *ErrHrmpMessagesPerCandidateOverflow) Error() string {
 	return fmt.Sprintf("HrmpMessagesPerCandidateOverflow(MessagesAllowed: %d, MessagesSubmitted: %d)", e.messagesAllowed, e.messagesSubmitted)
 }
 
-type CodeUpgradeRestricted struct{}
-
-func (*CodeUpgradeRestricted) isFragmentValidityError() {}
-
-func (e *CodeUpgradeRestricted) String() string {
-	return "CodeUpgradeRestricted()"
-}
-
-type HrmpMessagesDescendingOrDuplicate struct {
+type ErrHrmpMessagesDescendingOrDuplicate struct {
 	index uint
 }
 
-func (*HrmpMessagesDescendingOrDuplicate) isFragmentValidityError() {}
-
-func (e *HrmpMessagesDescendingOrDuplicate) String() string {
+func (e *ErrHrmpMessagesDescendingOrDuplicate) Error() string {
 	return fmt.Sprintf("HrmpMessagesDescendingOrDuplicate(Index: %d)", e.index)
 }
 
@@ -429,9 +350,14 @@ type Fragment struct {
 	relayParent          RelayChainBlockInfo
 	operatingConstraints Constraints
 	candidate            ProspectiveCandidate
-	modifications        ConstraintModifications
+	modifications        *ConstraintModifications
 }
 
+// NewFragment creates a new Fragment. This fails if the fragment isnt in line
+// with the operating constraints. That is, either its inputs or outputs fail
+// checks against the constraints.
+// This does not check that the collator signature is valid or wheter the PoV is
+// small enough.
 func NewFragment(
 	relayParent RelayChainBlockInfo,
 	operatingConstraints Constraints,
@@ -461,6 +387,91 @@ func checkAgainstConstraints(
 	commitments parachaintypes.CandidateCommitments,
 	validationCodeHash parachaintypes.ValidationCodeHash,
 	persistedValidationData parachaintypes.PersistedValidationData,
-) (ConstraintModifications, error) {
-	return ConstraintModifications{}, nil
+) (*ConstraintModifications, error) {
+	upwardMessages := make([]parachaintypes.UpwardMessage, 0)
+	// filter UMP signals
+	for upwardMessage := range skipUmpSignals(commitments.UpwardMessages) {
+		upwardMessages = append(upwardMessages, upwardMessage)
+	}
+
+	umpMessagesSent := len(upwardMessages)
+	umpBytesSent := 0
+	for _, message := range upwardMessages {
+		umpBytesSent += len(message)
+	}
+
+	hrmpWatermark := HrmpWatermarkUpdate{
+		Type:  Trunk,
+		Block: uint(commitments.HrmpWatermark),
+	}
+
+	if uint(commitments.HrmpWatermark) == relayParent.Number {
+		hrmpWatermark.Type = Head
+	}
+
+	outboundHrmp := make(map[parachaintypes.ParaID]OutboundHrmpChannelModification)
+	var lastRecipient *parachaintypes.ParaID
+
+	for i, message := range commitments.HorizontalMessages {
+		if lastRecipient != nil && *lastRecipient >= parachaintypes.ParaID(message.Recipient) {
+			return nil, &ErrHrmpMessagesDescendingOrDuplicate{index: uint(i)}
+		}
+
+		recipientParaID := parachaintypes.ParaID(message.Recipient)
+		lastRecipient = &recipientParaID
+		record, ok := outboundHrmp[recipientParaID]
+		if !ok {
+			record = OutboundHrmpChannelModification{}
+		}
+
+		record.BytesSubmitted += uint(len(message.Data))
+		record.MessagesSubmitted++
+		outboundHrmp[recipientParaID] = record
+	}
+
+	codeUpgradeApplied := false
+	if operatingConstraints.FutureValidationCode != nil {
+		codeUpgradeApplied = relayParent.Number >= operatingConstraints.FutureValidationCode.BlockNumber
+	}
+
+	modifications := &ConstraintModifications{
+		RequiredParent:       &commitments.HeadData,
+		HrmpWatermark:        &hrmpWatermark,
+		OutboundHrmp:         outboundHrmp,
+		UmpMessagesSent:      uint(umpMessagesSent),
+		UmpBytesSent:         uint(umpBytesSent),
+		DmpMessagesProcessed: uint(commitments.ProcessedDownwardMessages),
+		CodeUpgradeApplied:   codeUpgradeApplied,
+	}
+
+	err := validateAgainstConstraints(
+		operatingConstraints,
+		relayParent,
+		commitments,
+		persistedValidationData,
+		validationCodeHash,
+		modifications,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return modifications, nil
+}
+
+// UmpSeparator is a constant used to separate UMP signals.
+var UmpSeparator = []byte{}
+
+// skipUmpSignals is a utility function for skipping the UMP signals.
+func skipUmpSignals(upwardMessages []parachaintypes.UpwardMessage) iter.Seq[parachaintypes.UpwardMessage] {
+	return func(yield func(parachaintypes.UpwardMessage) bool) {
+		for _, message := range upwardMessages {
+			if !bytes.Equal([]byte(message), UmpSeparator) {
+				if !yield([]byte(message)) {
+					return
+				}
+			}
+			return
+		}
+	}
 }
