@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
@@ -205,6 +206,30 @@ type Constraints struct {
 	FutureValidationCode *FutureValidationCode
 }
 
+func (c *Constraints) Clone() *Constraints {
+	return &Constraints{
+		MinRelayParentNumber:  c.MinRelayParentNumber,
+		MaxPoVSize:            c.MaxPoVSize,
+		MaxCodeSize:           c.MaxCodeSize,
+		UmpRemaining:          c.UmpRemaining,
+		UmpRemainingBytes:     c.UmpRemainingBytes,
+		MaxUmpNumPerCandidate: c.MaxUmpNumPerCandidate,
+		DmpRemainingMessages:  append([]uint(nil), c.DmpRemainingMessages...),
+		HrmpInbound: InboundHrmpLimitations{
+			ValidWatermarks: append([]uint(nil), c.HrmpInbound.ValidWatermarks...),
+		},
+		HrmpChannelsOut:        maps.Clone(c.HrmpChannelsOut),
+		MaxHrmpNumPerCandidate: c.MaxHrmpNumPerCandidate,
+		RequiredParent:         c.RequiredParent,
+		ValidationCodeHash:     c.ValidationCodeHash,
+		UpgradeRestriction:     c.UpgradeRestriction,
+		FutureValidationCode: &FutureValidationCode{
+			BlockNumber:        c.FutureValidationCode.BlockNumber,
+			ValidationCodeHash: c.FutureValidationCode.ValidationCodeHash,
+		},
+	}
+}
+
 func (c *Constraints) CheckModifications(modifications *ConstraintModifications) error {
 	if modifications.HrmpWatermark != nil && modifications.HrmpWatermark.Type == Trunk {
 		if !slices.Contains(c.HrmpInbound.ValidWatermarks, modifications.HrmpWatermark.Watermark()) {
@@ -266,6 +291,95 @@ func (c *Constraints) CheckModifications(modifications *ConstraintModifications)
 	}
 
 	return nil
+}
+
+func (c *Constraints) ApplyModifications(modifications *ConstraintModifications) (*Constraints, error) {
+	newConstraints := c.Clone()
+
+	if modifications.RequiredParent != nil {
+		newConstraints.RequiredParent = *modifications.RequiredParent
+	}
+
+	if modifications.HrmpWatermark != nil {
+		pos, found := slices.BinarySearch(
+			newConstraints.HrmpInbound.ValidWatermarks,
+			modifications.HrmpWatermark.Watermark())
+
+		if found {
+			// Exact match, so this is OK in all cases.
+			newConstraints.HrmpInbound.ValidWatermarks = newConstraints.HrmpInbound.ValidWatermarks[pos+1:]
+		} else {
+			switch modifications.HrmpWatermark.Type {
+			case Head:
+				// Updates to Head are always OK.
+				newConstraints.HrmpInbound.ValidWatermarks = newConstraints.HrmpInbound.ValidWatermarks[pos:]
+			case Trunk:
+				// Trunk update landing on disallowed watermark is not OK.
+				return nil, &ErrDisallowedHrmpWatermark{blockNumber: modifications.HrmpWatermark.Block}
+			}
+		}
+	}
+
+	for id, outboundHrmpMod := range modifications.OutboundHrmp {
+		outbound, ok := newConstraints.HrmpChannelsOut[id]
+		if !ok {
+			return nil, &ErrNoSuchHrmpChannel{id}
+		}
+
+		if outboundHrmpMod.BytesSubmitted > outbound.BytesRemaining {
+			return nil, &ErrHrmpBytesOverflow{
+				paraId:         id,
+				bytesRemaining: outbound.BytesRemaining,
+				bytesSubmitted: outboundHrmpMod.BytesSubmitted,
+			}
+		}
+
+		if outboundHrmpMod.MessagesSubmitted > outbound.MessagesRemaining {
+			return nil, &ErrHrmpMessagesOverflow{
+				paraId:            id,
+				messagesRemaining: outbound.MessagesRemaining,
+				messagesSubmitted: outboundHrmpMod.MessagesSubmitted,
+			}
+		}
+
+		outbound.BytesRemaining -= outboundHrmpMod.BytesSubmitted
+		outbound.MessagesRemaining -= outboundHrmpMod.MessagesSubmitted
+	}
+
+	if modifications.UmpMessagesSent > newConstraints.UmpRemaining {
+		return nil, &ErrUmpMessagesOverflow{
+			messagesRemaining: newConstraints.UmpRemaining,
+			messagesSubmitted: modifications.UmpMessagesSent,
+		}
+	}
+	newConstraints.UmpRemaining -= modifications.UmpMessagesSent
+
+	if modifications.UmpBytesSent > newConstraints.UmpRemainingBytes {
+		return nil, &ErrUmpBytesOverflow{
+			bytesRemaining: newConstraints.UmpRemainingBytes,
+			bytesSubmitted: modifications.UmpBytesSent,
+		}
+	}
+	newConstraints.UmpRemainingBytes -= modifications.UmpBytesSent
+
+	if modifications.DmpMessagesProcessed > uint(len(newConstraints.DmpRemainingMessages)) {
+		return nil, &ErrDmpMessagesUnderflow{
+			messagesRemaining: uint(len(newConstraints.DmpRemainingMessages)),
+			messagesProcessed: modifications.DmpMessagesProcessed,
+		}
+	} else {
+		newConstraints.DmpRemainingMessages = newConstraints.DmpRemainingMessages[modifications.DmpMessagesProcessed:]
+	}
+
+	if modifications.CodeUpgradeApplied {
+		if newConstraints.FutureValidationCode == nil {
+			return nil, ErrAppliedNonexistentCodeUpgrade
+		}
+
+		newConstraints.ValidationCodeHash = newConstraints.FutureValidationCode.ValidationCodeHash
+	}
+
+	return newConstraints, nil
 }
 
 func FromPrimitiveConstraints(pc parachaintypes.Constraints) *Constraints {
@@ -366,10 +480,22 @@ type ConstraintModifications struct {
 	CodeUpgradeApplied bool
 }
 
+func (cm *ConstraintModifications) Clone() *ConstraintModifications {
+	return &ConstraintModifications{
+		RequiredParent:       cm.RequiredParent,
+		HrmpWatermark:        cm.HrmpWatermark,
+		OutboundHrmp:         maps.Clone(cm.OutboundHrmp),
+		UmpMessagesSent:      cm.UmpMessagesSent,
+		UmpBytesSent:         cm.UmpBytesSent,
+		DmpMessagesProcessed: cm.DmpMessagesProcessed,
+		CodeUpgradeApplied:   cm.CodeUpgradeApplied,
+	}
+}
+
 // Identity returns the 'identity' modifications: these can be applied to
 // any constraints and yield the exact same result.
-func NewConstraintModificationsIdentity() ConstraintModifications {
-	return ConstraintModifications{
+func NewConstraintModificationsIdentity() *ConstraintModifications {
+	return &ConstraintModifications{
 		RequiredParent:       nil,
 		HrmpWatermark:        nil,
 		OutboundHrmp:         make(map[parachaintypes.ParaID]OutboundHrmpChannelModification),
@@ -424,6 +550,10 @@ func (f *Fragment) RelayParent() RelayChainBlockInfo {
 
 func (f *Fragment) Candidate() ProspectiveCandidate {
 	return f.candidate
+}
+
+func (f *Fragment) ConstraintModifications() *ConstraintModifications {
+	return f.modifications
 }
 
 // NewFragment creates a new Fragment. This fails if the fragment isnt in line

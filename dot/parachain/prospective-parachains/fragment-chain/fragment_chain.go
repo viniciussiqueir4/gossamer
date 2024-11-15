@@ -1,6 +1,7 @@
 package fragmentchain
 
 import (
+	"bytes"
 	"fmt"
 	"iter"
 	"slices"
@@ -17,6 +18,10 @@ const (
 	Seconded CandidateState = iota
 	Backed
 )
+
+func forkSelectionRule(hash1, hash2 parachaintypes.CandidateHash) int {
+	return bytes.Compare(hash1.Value[:], hash2.Value[:])
+}
 
 // CandidateEntry represents a candidate into the CandidateStorage
 // TODO: Should CandidateEntry implements `HypotheticalOrConcreteCandidate`
@@ -86,6 +91,14 @@ type CandidateStorage struct {
 	byParentHead    map[common.Hash]map[parachaintypes.CandidateHash]any
 	byOutputHead    map[common.Hash]map[parachaintypes.CandidateHash]any
 	byCandidateHash map[parachaintypes.CandidateHash]*CandidateEntry
+}
+
+func NewCandidateStorage() *CandidateStorage {
+	return &CandidateStorage{
+		byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+		byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+		byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
+	}
 }
 
 func (c *CandidateStorage) AddPendingAvailabilityCandidate(
@@ -244,7 +257,7 @@ type Scope struct {
 	// candidates pending availability at this block
 	pendindAvailability []*PendindAvailability
 	// the base constraints derived from the latest included candidate
-	baseConstraints parachaintypes.Constraints
+	baseConstraints *inclusionemulator.Constraints
 	// equal to `max_candidate_depth`
 	maxDepth uint
 }
@@ -261,7 +274,7 @@ type Scope struct {
 // should be provided. It is allowed to provide 0 ancestors.
 func NewScopeWithAncestors(
 	relayParent inclusionemulator.RelayChainBlockInfo,
-	baseConstraints parachaintypes.Constraints,
+	baseConstraints *inclusionemulator.Constraints,
 	pendingAvailability []*PendindAvailability,
 	maxDepth uint,
 	ancestors iter.Seq[inclusionemulator.RelayChainBlockInfo],
@@ -332,9 +345,9 @@ func (s *Scope) GetPendingAvailability(candidateHash parachaintypes.CandidateHas
 // Fragment node is a node that belongs to a `BackedChain`. It holds constraints based on
 // the ancestors in the chain
 type FragmentNode struct {
-	fragment                inclusionemulator.Fragment
+	fragment                *inclusionemulator.Fragment
 	candidateHash           parachaintypes.CandidateHash
-	cumulativeModifications inclusionemulator.ConstraintModifications
+	cumulativeModifications *inclusionemulator.ConstraintModifications
 	parentHeadDataHash      common.Hash
 	outputHeadDataHash      common.Hash
 }
@@ -376,11 +389,20 @@ type BackedChain struct {
 	candidates map[parachaintypes.CandidateHash]struct{}
 }
 
-func (bc *BackedChain) Push(candidate FragmentNode) {
+func NewBackedChain() *BackedChain {
+	return &BackedChain{
+		chain:        make([]*FragmentNode, 0),
+		byParentHead: make(map[common.Hash]parachaintypes.CandidateHash),
+		byOutputHead: make(map[common.Hash]parachaintypes.CandidateHash),
+		candidates:   make(map[parachaintypes.CandidateHash]struct{}),
+	}
+}
+
+func (bc *BackedChain) Push(candidate *FragmentNode) {
 	bc.candidates[candidate.candidateHash] = struct{}{}
 	bc.byParentHead[candidate.parentHeadDataHash] = candidate.candidateHash
 	bc.byOutputHead[candidate.outputHeadDataHash] = candidate.candidateHash
-	bc.chain = append(bc.chain, &candidate)
+	bc.chain = append(bc.chain, candidate)
 }
 
 func (bc *BackedChain) Clear() []*FragmentNode {
@@ -424,4 +446,244 @@ func (bc *BackedChain) RevertToParentHash(parentHeadDataHash common.Hash) []*Fra
 func (bc *BackedChain) Contains(hash parachaintypes.CandidateHash) bool {
 	_, ok := bc.candidates[hash]
 	return ok
+}
+
+// this is a fragment chain specific to an active leaf. It holds the current
+// best backable candidate chain, as well as potential candidates which could
+// become connected to the chain in the future or which could even overwrite
+// the existing chain
+type FragmentChain struct {
+	// the current scope, which dictates the on-chain operating constraints that
+	// all future candidates must ad-here to.
+	scope *Scope
+
+	// the current best chain of backable candidates. It only contains candidates
+	// which build on top of each other and which have reached the backing quorum.
+	// In the presence of potential forks, this chain will pick a fork according to
+	// the `forkSelectionRule`
+	bestChain *BackedChain
+
+	// the potential candidate storage. Contains candidates which are not yet part of
+	// the `chain` but may become in the future. These can form any tree shape as well
+	// as contain unconnected candidates for which we don't know the parent.
+	unconnected *CandidateStorage
+}
+
+// NewFragmentChain createa a new fragment chain with the given scope and populates it with
+// the candidates pending availability
+func NewFragmentChain(scope *Scope, candidatesPendingAvailability *CandidateStorage) *FragmentChain {
+	fragmentChain := &FragmentChain{
+		scope:       scope,
+		bestChain:   NewBackedChain(),
+		unconnected: NewCandidateStorage(),
+	}
+
+	// we only need to populate the best backable chain. Candidates pending availability
+	// must form a chain with the latest included head.
+	fragmentChain.populateChain(candidatesPendingAvailability)
+	return fragmentChain
+}
+
+// earliestRelayParent returns the earliest relay parent a new candidate can have in order
+// to be added to the chain right now. This is the relay parent of the latest candidate in
+// the chain. The value returned may not be valid if we want to add a candidate pending
+// availability, which may have a relay parent which is out of scope, special handling
+// is needed in that case.
+func (f *FragmentChain) earliestRelayParent() *inclusionemulator.RelayChainBlockInfo {
+	if len(f.bestChain.chain) > 0 {
+		lastCandidate := f.bestChain.chain[len(f.bestChain.chain)-1]
+		info := f.scope.Ancestor(lastCandidate.relayParent())
+		if info != nil {
+			return info
+		}
+
+		// if the relay parent is out of scope AND it is in the chain
+		// it must be a candidate pending availability
+		pending := f.scope.GetPendingAvailability(lastCandidate.candidateHash)
+		if pending == nil {
+			return nil
+		}
+
+		return &pending.RelayParent
+	}
+
+	earliest := f.scope.EarliestRelayParent()
+	return &earliest
+}
+
+type possibleChild struct {
+	fragment           *inclusionemulator.Fragment
+	candidateHash      parachaintypes.CandidateHash
+	outputHeadDataHash common.Hash
+	parentHeadDataHash common.Hash
+}
+
+// populateChain populates the fragment chain with candidates from the supplied `CandidateStorage`.
+// Can be called by the `NewFragmentChain` or when backing a new candidate. When this is called
+// it may cause the previous chain to be completely erased or it may add more than one candidate
+func (f *FragmentChain) populateChain(storage *CandidateStorage) {
+	var cumulativeModifications *inclusionemulator.ConstraintModifications
+	if len(f.bestChain.chain) > 0 {
+		lastCandidate := f.bestChain.chain[len(f.bestChain.chain)-1]
+		cumulativeModifications = lastCandidate.cumulativeModifications
+	} else {
+		cumulativeModifications = inclusionemulator.NewConstraintModificationsIdentity()
+	}
+
+	earliestRelayParent := f.earliestRelayParent()
+	if earliestRelayParent == nil {
+		return
+	}
+
+	for {
+		if len(f.bestChain.chain) > int(f.scope.maxDepth) {
+			break
+		}
+
+		childConstraints, err := f.scope.baseConstraints.ApplyModifications(cumulativeModifications)
+		if err != nil {
+			// TODO: include logger
+			fmt.Println("failed to apply modifications:", err)
+			break
+		}
+
+		requiredHeadHash, err := childConstraints.RequiredParent.Hash()
+		if err != nil {
+			fmt.Println("failed while hashing required parent:", err)
+		}
+
+		possibleChildren := make([]*possibleChild, 0)
+		// select the few possible backed/backable children which can be added to the chain right now
+		for candidateEntry := range storage.possibleBackedParaChildren(requiredHeadHash) {
+			// only select a candidate if:
+			// 1. it does not introduce a fork or a cycle
+			// 2. parent hash is correct
+			// 3. relay parent does not move backwards
+			// 4. all non-pending-availability candidates have relay-parent in the scope
+			// 5. candidate outputs fulfill constraints
+
+			var relayParent inclusionemulator.RelayChainBlockInfo
+			var minRelayParent uint
+
+			pending := f.scope.GetPendingAvailability(candidateEntry.candidateHash)
+			if pending != nil {
+				relayParent = pending.RelayParent
+				if len(f.bestChain.chain) == 0 {
+					minRelayParent = pending.RelayParent.Number
+				} else {
+					minRelayParent = earliestRelayParent.Number
+				}
+			} else {
+				info := f.scope.Ancestor(candidateEntry.relayParent)
+				if info == nil {
+					continue
+				}
+
+				relayParent = *info
+				minRelayParent = earliestRelayParent.Number
+			}
+
+			if err := f.checkCyclesOrInvalidTree(candidateEntry.outputHeadDataHash); err != nil {
+				fmt.Println("checking cycle or invalid tree:", err)
+				continue
+			}
+
+			// require: candidates dont move backwards and only pending availability
+			// candidates can be out-of-scope.
+			//
+			// earliest relay parent can be before the
+
+			if relayParent.Number < minRelayParent {
+				// relay parent moved backwards
+				continue
+			}
+
+			// don't add candidates if they're already present in the chain
+			// this can never happen, as candidates can only be duplicated
+			// if there's a cycle and we shouldnt have allowed for a cycle
+			// to be chained
+			if f.bestChain.Contains(candidateEntry.candidateHash) {
+				continue
+			}
+
+			constraints := childConstraints.Clone()
+			if pending != nil {
+				// overwrite for candidates pending availability as a special-case
+				constraints.MinRelayParentNumber = pending.RelayParent.Number
+			}
+
+			fragment, err := inclusionemulator.NewFragment(relayParent, constraints, candidateEntry.candidate)
+			if err != nil {
+				fmt.Println("failed to create fragment:", err)
+				continue
+			}
+
+			possibleChildren = append(possibleChildren, &possibleChild{
+				fragment:           fragment,
+				candidateHash:      candidateEntry.candidateHash,
+				outputHeadDataHash: candidateEntry.outputHeadDataHash,
+				parentHeadDataHash: candidateEntry.parentHeadDataHash,
+			})
+		}
+
+		if len(possibleChildren) == 0 {
+			break
+		}
+
+		// choose the best candidate
+		bestCandidate := slices.MinFunc(possibleChildren, func(fst, snd *possibleChild) int {
+			// always pick a candidate pending availability as best.
+			if f.scope.GetPendingAvailability(fst.candidateHash) != nil {
+				return -1
+			} else if f.scope.GetPendingAvailability(snd.candidateHash) != nil {
+				return 1
+			} else {
+				return forkSelectionRule(fst.candidateHash, snd.candidateHash)
+			}
+		})
+
+		// remove the candidate from storage
+		storage.removeCandidate(bestCandidate.candidateHash)
+
+		// update the cumulative constraint modifications
+		cumulativeModifications.Stack(bestCandidate.fragment.ConstraintModifications())
+
+		// update the earliest relay parent
+		earliestRelayParent = &inclusionemulator.RelayChainBlockInfo{
+			Hash:        bestCandidate.fragment.RelayParent().Hash,
+			Number:      bestCandidate.fragment.RelayParent().Number,
+			StorageRoot: bestCandidate.fragment.RelayParent().StorageRoot,
+		}
+
+		node := &FragmentNode{
+			fragment:                bestCandidate.fragment,
+			candidateHash:           bestCandidate.candidateHash,
+			parentHeadDataHash:      bestCandidate.parentHeadDataHash,
+			outputHeadDataHash:      bestCandidate.outputHeadDataHash,
+			cumulativeModifications: cumulativeModifications.Clone(),
+		}
+
+		// add the candidate to the chain now
+		f.bestChain.Push(node)
+	}
+}
+
+// checkCyclesOrInvalidTree checks whether a candidate outputting this head data would
+// introduce a cycle or multiple paths to the same state. Trivial 0-length cycles are
+// checked  in `NewCandidateEntry`.
+func (f *FragmentChain) checkCyclesOrInvalidTree(outputHeadDataHash common.Hash) error {
+	// this should catch a cycle where this candidate would point back to the parent
+	// of some candidate in the chain
+	_, ok := f.bestChain.byParentHead[outputHeadDataHash]
+	if ok {
+		return ErrCycle
+	}
+
+	// multiple paths to the same state, which cannot happen for a chain
+	_, ok = f.bestChain.byOutputHead[outputHeadDataHash]
+	if ok {
+		return ErrMultiplePaths
+	}
+
+	return nil
 }

@@ -262,7 +262,7 @@ func TestEarliestRelayParent(t *testing.T) {
 					Hash:   common.Hash{0x01},
 					Number: 10,
 				}
-				baseConstraints := parachaintypes.Constraints{
+				baseConstraints := &inclusionemulator.Constraints{
 					MinRelayParentNumber: 5,
 				}
 				ancestor := inclusionemulator.RelayChainBlockInfo{
@@ -288,7 +288,7 @@ func TestEarliestRelayParent(t *testing.T) {
 					Hash:   common.Hash{0x01},
 					Number: 10,
 				}
-				baseConstraints := parachaintypes.Constraints{
+				baseConstraints := &inclusionemulator.Constraints{
 					MinRelayParentNumber: 5,
 				}
 				return &Scope{
@@ -335,9 +335,9 @@ func TestBackedChain_RevertToParentHash(t *testing.T) {
 						candidateHash:           parachaintypes.CandidateHash{Value: common.Hash{byte(i)}},
 						parentHeadDataHash:      common.Hash{byte(i)},
 						outputHeadDataHash:      common.Hash{byte(i + 1)},
-						cumulativeModifications: inclusionemulator.ConstraintModifications{},
+						cumulativeModifications: &inclusionemulator.ConstraintModifications{},
 					}
-					chain.Push(*node)
+					chain.Push(node)
 				}
 				return chain
 			},
@@ -359,9 +359,9 @@ func TestBackedChain_RevertToParentHash(t *testing.T) {
 						candidateHash:           parachaintypes.CandidateHash{Value: common.Hash{byte(i)}},
 						parentHeadDataHash:      common.Hash{byte(i)},
 						outputHeadDataHash:      common.Hash{byte(i + 1)},
-						cumulativeModifications: inclusionemulator.ConstraintModifications{},
+						cumulativeModifications: &inclusionemulator.ConstraintModifications{},
 					}
-					chain.Push(*node)
+					chain.Push(node)
 				}
 				return chain
 			},
@@ -383,9 +383,9 @@ func TestBackedChain_RevertToParentHash(t *testing.T) {
 						candidateHash:           parachaintypes.CandidateHash{Value: common.Hash{byte(i)}},
 						parentHeadDataHash:      common.Hash{byte(i)},
 						outputHeadDataHash:      common.Hash{byte(i + 1)},
-						cumulativeModifications: inclusionemulator.ConstraintModifications{},
+						cumulativeModifications: &inclusionemulator.ConstraintModifications{},
 					}
-					chain.Push(*node)
+					chain.Push(node)
 				}
 				return chain
 			},
