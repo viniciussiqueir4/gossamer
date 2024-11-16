@@ -100,7 +100,7 @@ type ErrValidationCodeMismatch struct {
 }
 
 func (e *ErrValidationCodeMismatch) Error() string {
-	return fmt.Sprintf("ValidationCodeMismatch(Expected: %s, Got: %s)", e.expected, e.got)
+	return fmt.Sprintf("ValidationCodeMismatch(Expected: %v, Got: %v)", e.expected, e.got)
 }
 
 type ErrPersistedValidationDataMismatch struct {
@@ -207,6 +207,13 @@ type Constraints struct {
 }
 
 func (c *Constraints) Clone() *Constraints {
+	var futureValidationCode *FutureValidationCode
+	if c.FutureValidationCode != nil {
+		futureValidationCode = &FutureValidationCode{
+			BlockNumber:        c.FutureValidationCode.BlockNumber,
+			ValidationCodeHash: c.FutureValidationCode.ValidationCodeHash,
+		}
+	}
 	return &Constraints{
 		MinRelayParentNumber:  c.MinRelayParentNumber,
 		MaxPoVSize:            c.MaxPoVSize,
@@ -223,10 +230,7 @@ func (c *Constraints) Clone() *Constraints {
 		RequiredParent:         c.RequiredParent,
 		ValidationCodeHash:     c.ValidationCodeHash,
 		UpgradeRestriction:     c.UpgradeRestriction,
-		FutureValidationCode: &FutureValidationCode{
-			BlockNumber:        c.FutureValidationCode.BlockNumber,
-			ValidationCodeHash: c.FutureValidationCode.ValidationCodeHash,
-		},
+		FutureValidationCode:   futureValidationCode,
 	}
 }
 
@@ -538,13 +542,13 @@ func (cm *ConstraintModifications) Stack(other *ConstraintModifications) {
 // Fragment represents another prospective parachain block
 // This is a type which guarantees that the candidate is valid under the operating constraints
 type Fragment struct {
-	relayParent          RelayChainBlockInfo
+	relayParent          *RelayChainBlockInfo
 	operatingConstraints *Constraints
 	candidate            ProspectiveCandidate
 	modifications        *ConstraintModifications
 }
 
-func (f *Fragment) RelayParent() RelayChainBlockInfo {
+func (f *Fragment) RelayParent() *RelayChainBlockInfo {
 	return f.relayParent
 }
 
@@ -562,10 +566,10 @@ func (f *Fragment) ConstraintModifications() *ConstraintModifications {
 // This does not check that the collator signature is valid or wheter the PoV is
 // small enough.
 func NewFragment(
-	relayParent RelayChainBlockInfo,
+	relayParent *RelayChainBlockInfo,
 	operatingConstraints *Constraints,
 	candidate ProspectiveCandidate) (*Fragment, error) {
-	modifications, err := checkAgainstConstraints(
+	modifications, err := CheckAgainstConstraints(
 		relayParent,
 		operatingConstraints,
 		candidate.Commitments,
@@ -584,8 +588,8 @@ func NewFragment(
 	}, nil
 }
 
-func checkAgainstConstraints(
-	relayParent RelayChainBlockInfo,
+func CheckAgainstConstraints(
+	relayParent *RelayChainBlockInfo,
 	operatingConstraints *Constraints,
 	commitments parachaintypes.CandidateCommitments,
 	validationCodeHash parachaintypes.ValidationCodeHash,
@@ -681,7 +685,7 @@ func skipUmpSignals(upwardMessages []parachaintypes.UpwardMessage) iter.Seq[para
 
 func validateAgainstConstraints(
 	constraints *Constraints,
-	relayParent RelayChainBlockInfo,
+	relayParent *RelayChainBlockInfo,
 	commitments parachaintypes.CandidateCommitments,
 	persistedValidationData parachaintypes.PersistedValidationData,
 	validationCodeHash parachaintypes.ValidationCodeHash,

@@ -6,6 +6,7 @@ import (
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	inclusionemulator "github.com/ChainSafe/gossamer/dot/parachain/util/inclusion-emulator"
 	"github.com/ChainSafe/gossamer/lib/common"
+	"github.com/ChainSafe/gossamer/pkg/scale"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/btree"
 )
@@ -418,4 +419,60 @@ func TestBackedChain_RevertToParentHash(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFragmentChainWithFreshScope(t *testing.T) {
+	relayParent := inclusionemulator.RelayChainBlockInfo{
+		Hash:        common.Hash{0x00},
+		Number:      0,
+		StorageRoot: common.Hash{0x00},
+	}
+
+	baseConstraints := &inclusionemulator.Constraints{
+		RequiredParent:       parachaintypes.HeadData{Data: []byte{byte(0)}},
+		MinRelayParentNumber: 0,
+		ValidationCodeHash:   parachaintypes.ValidationCodeHash(common.Hash{0x03}),
+	}
+
+	scope, err := NewScopeWithAncestors(relayParent, baseConstraints, nil, 10, nil)
+	assert.NoError(t, err)
+
+	candidateStorage := NewCandidateStorage()
+
+	// Create 3 candidate entries forming a chain
+	for i := 0; i < 3; i++ {
+		candidateHash := parachaintypes.CandidateHash{Value: [32]byte{byte(i + 1)}}
+		parentHead := parachaintypes.HeadData{Data: []byte{byte(i)}}
+		outputHead := parachaintypes.HeadData{Data: []byte{byte(i + 1)}}
+
+		persistedValidationData := parachaintypes.PersistedValidationData{
+			ParentHead: parentHead,
+		}
+
+		// Marshal and hash the persisted validation data
+		pvdBytes, err := scale.Marshal(persistedValidationData)
+		assert.NoError(t, err)
+		pvdHash, err := common.Blake2bHash(pvdBytes)
+		assert.NoError(t, err)
+
+		committedCandidate := parachaintypes.CommittedCandidateReceipt{
+			Descriptor: parachaintypes.CandidateDescriptor{
+				RelayParent:                 common.Hash{0x00},
+				PersistedValidationDataHash: pvdHash,
+				PovHash:                     common.Hash{0x02},
+				ValidationCodeHash:          parachaintypes.ValidationCodeHash(common.Hash{0x03}),
+			},
+			Commitments: parachaintypes.CandidateCommitments{
+				HeadData: outputHead,
+			},
+		}
+
+		err = candidateStorage.AddPendingAvailabilityCandidate(candidateHash, committedCandidate, persistedValidationData)
+		assert.NoError(t, err)
+	}
+
+	fragmentChain := NewFragmentChain(scope, candidateStorage)
+
+	// Check that the best chain contains 3 candidates
+	assert.Equal(t, 3, len(fragmentChain.bestChain.chain))
 }
