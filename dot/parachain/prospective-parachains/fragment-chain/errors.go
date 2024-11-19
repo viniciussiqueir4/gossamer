@@ -66,8 +66,8 @@ type ErrRelayParentNotInScope struct {
 }
 
 func (e ErrRelayParentNotInScope) Error() string {
-	return fmt.Sprintf("relay parent %x not in scope, earliest relay parent allowed %x",
-		e.relayParentA, e.relayParentB)
+	return fmt.Sprintf("relay parent %s not in scope, earliest relay parent allowed %s",
+		e.relayParentA.String(), e.relayParentB.String())
 }
 
 type ErrUnexpectedAncestor struct {

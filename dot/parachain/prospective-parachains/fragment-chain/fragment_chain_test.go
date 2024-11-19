@@ -1,13 +1,17 @@
 package fragmentchain
 
 import (
+	"bytes"
+	"slices"
 	"testing"
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	inclusionemulator "github.com/ChainSafe/gossamer/dot/parachain/util/inclusion-emulator"
 	"github.com/ChainSafe/gossamer/lib/common"
+	"github.com/ChainSafe/gossamer/lib/crypto/sr25519"
 	"github.com/ChainSafe/gossamer/pkg/scale"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
 )
 
@@ -475,4 +479,1175 @@ func TestFragmentChainWithFreshScope(t *testing.T) {
 
 	// Check that the best chain contains 3 candidates
 	assert.Equal(t, 3, len(fragmentChain.bestChain.chain))
+}
+
+func makeConstraints(
+	minRelayParentNumber uint,
+	validWatermarks []uint,
+	requiredParent parachaintypes.HeadData,
+) *inclusionemulator.Constraints {
+	return &inclusionemulator.Constraints{
+		MinRelayParentNumber:  minRelayParentNumber,
+		MaxPoVSize:            1_000_000,
+		MaxCodeSize:           1_000_000,
+		UmpRemaining:          10,
+		UmpRemainingBytes:     1_000,
+		MaxUmpNumPerCandidate: 10,
+		DmpRemainingMessages:  make([]uint, 10),
+		HrmpInbound: inclusionemulator.InboundHrmpLimitations{
+			ValidWatermarks: validWatermarks,
+		},
+		HrmpChannelsOut:        make(map[parachaintypes.ParaID]inclusionemulator.OutboundHrmpChannelLimitations),
+		MaxHrmpNumPerCandidate: 0,
+		RequiredParent:         requiredParent,
+		ValidationCodeHash:     parachaintypes.ValidationCodeHash(common.BytesToHash(bytes.Repeat([]byte{42}, 32))),
+		UpgradeRestriction:     nil,
+		FutureValidationCode:   nil,
+	}
+}
+
+func makeCommittedCandidate(
+	t *testing.T,
+	paraID parachaintypes.ParaID,
+	relayParent common.Hash,
+	relayParentNumber uint32,
+	parentHead parachaintypes.HeadData,
+	paraHead parachaintypes.HeadData,
+	hrmpWatermark uint32,
+) (parachaintypes.PersistedValidationData, parachaintypes.CommittedCandidateReceipt) {
+	persistedValidationData := parachaintypes.PersistedValidationData{
+		ParentHead:             parentHead,
+		RelayParentNumber:      relayParentNumber,
+		RelayParentStorageRoot: common.Hash{},
+		MaxPovSize:             1_000_000,
+	}
+
+	pvdBytes, err := scale.Marshal(persistedValidationData)
+	require.NoError(t, err)
+
+	pvdHash, err := common.Blake2bHash(pvdBytes)
+	require.NoError(t, err)
+
+	paraHeadHash, err := paraHead.Hash()
+	require.NoError(t, err)
+
+	candidate := parachaintypes.CommittedCandidateReceipt{
+		Descriptor: parachaintypes.CandidateDescriptor{
+			ParaID:                      paraID,
+			RelayParent:                 relayParent,
+			Collator:                    parachaintypes.CollatorID([sr25519.PublicKeyLength]byte{}),
+			PersistedValidationDataHash: pvdHash,
+			PovHash:                     common.BytesToHash(bytes.Repeat([]byte{1}, 32)),
+			ErasureRoot:                 common.BytesToHash(bytes.Repeat([]byte{1}, 32)),
+			Signature:                   parachaintypes.CollatorSignature([sr25519.SignatureLength]byte{}),
+			ParaHead:                    paraHeadHash,
+			ValidationCodeHash:          parachaintypes.ValidationCodeHash(common.BytesToHash(bytes.Repeat([]byte{42}, 32))),
+		},
+		Commitments: parachaintypes.CandidateCommitments{
+			UpwardMessages:            []parachaintypes.UpwardMessage{},
+			HorizontalMessages:        []parachaintypes.OutboundHrmpMessage{},
+			NewValidationCode:         nil,
+			HeadData:                  paraHead,
+			ProcessedDownwardMessages: 1,
+			HrmpWatermark:             hrmpWatermark,
+		},
+	}
+
+	return persistedValidationData, candidate
+}
+
+func TestScopeRejectsAncestors(t *testing.T) {
+	tests := map[string]struct {
+		relayParent         *inclusionemulator.RelayChainBlockInfo
+		ancestors           []inclusionemulator.RelayChainBlockInfo
+		maxDepth            uint
+		baseConstraints     *inclusionemulator.Constraints
+		pendingAvailability []*PendindAvailability
+		expectedError       error
+	}{
+		"rejects_ancestor_that_skips_blocks": {
+			relayParent: &inclusionemulator.RelayChainBlockInfo{
+				Number:      10,
+				Hash:        common.BytesToHash(bytes.Repeat([]byte{0x10}, 32)),
+				StorageRoot: common.BytesToHash(bytes.Repeat([]byte{0x69}, 32)),
+			},
+			ancestors: []inclusionemulator.RelayChainBlockInfo{
+				{
+					Number:      8,
+					Hash:        common.BytesToHash(bytes.Repeat([]byte{0x08}, 32)),
+					StorageRoot: common.BytesToHash(bytes.Repeat([]byte{0x69}, 69)),
+				},
+			},
+			maxDepth: 2,
+			baseConstraints: makeConstraints(8, []uint{8, 9},
+				parachaintypes.HeadData{Data: []byte{0x01, 0x02, 0x03}}),
+			pendingAvailability: make([]*PendindAvailability, 0),
+			expectedError:       ErrUnexpectedAncestor{Number: 8, Prev: 10},
+		},
+		"rejects_ancestor_for_zero_block": {
+			relayParent: &inclusionemulator.RelayChainBlockInfo{
+				Number:      0,
+				Hash:        common.BytesToHash(bytes.Repeat([]byte{0}, 32)),
+				StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+			},
+			ancestors: []inclusionemulator.RelayChainBlockInfo{
+				{
+					Number:      99999,
+					Hash:        common.BytesToHash(bytes.Repeat([]byte{99}, 32)),
+					StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+				},
+			},
+			maxDepth:            2,
+			baseConstraints:     makeConstraints(0, []uint{}, parachaintypes.HeadData{Data: []byte{1, 2, 3}}),
+			pendingAvailability: make([]*PendindAvailability, 0),
+			expectedError:       ErrUnexpectedAncestor{Number: 99999, Prev: 0},
+		},
+		"rejects_unordered_ancestors": {
+			relayParent: &inclusionemulator.RelayChainBlockInfo{
+				Number:      5,
+				Hash:        common.BytesToHash(bytes.Repeat([]byte{0}, 32)),
+				StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+			},
+			ancestors: []inclusionemulator.RelayChainBlockInfo{
+				{
+					Number:      4,
+					Hash:        common.BytesToHash(bytes.Repeat([]byte{4}, 32)),
+					StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+				},
+				{
+					Number:      2,
+					Hash:        common.BytesToHash(bytes.Repeat([]byte{2}, 32)),
+					StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+				},
+				{
+					Number:      3,
+					Hash:        common.BytesToHash(bytes.Repeat([]byte{3}, 32)),
+					StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+				},
+			},
+			maxDepth:            2,
+			baseConstraints:     makeConstraints(0, []uint{2}, parachaintypes.HeadData{Data: []byte{1, 2, 3}}),
+			pendingAvailability: make([]*PendindAvailability, 0),
+			expectedError:       ErrUnexpectedAncestor{Number: 2, Prev: 4},
+		},
+	}
+
+	for name, tt := range tests {
+		tt := tt
+		t.Run(name, func(t *testing.T) {
+			scope, err := NewScopeWithAncestors(*tt.relayParent, tt.baseConstraints, tt.pendingAvailability, tt.maxDepth, tt.ancestors)
+			require.ErrorIs(t, err, tt.expectedError)
+			require.Nil(t, scope)
+		})
+	}
+}
+
+func TestScopeOnlyTakesAncestorsUpToMin(t *testing.T) {
+	relayParent := inclusionemulator.RelayChainBlockInfo{
+		Number:      5,
+		Hash:        common.BytesToHash(bytes.Repeat([]byte{0}, 32)),
+		StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+	}
+
+	ancestors := []inclusionemulator.RelayChainBlockInfo{
+		{
+			Number:      4,
+			Hash:        common.BytesToHash(bytes.Repeat([]byte{4}, 32)),
+			StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+		},
+		{
+			Number:      3,
+			Hash:        common.BytesToHash(bytes.Repeat([]byte{3}, 32)),
+			StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+		},
+		{
+			Number:      2,
+			Hash:        common.BytesToHash(bytes.Repeat([]byte{2}, 32)),
+			StorageRoot: common.BytesToHash(bytes.Repeat([]byte{69}, 32)),
+		},
+	}
+
+	maxDepth := uint(2)
+	baseConstraints := makeConstraints(0, []uint{2}, parachaintypes.HeadData{Data: []byte{1, 2, 3}})
+	pendingAvailability := make([]*PendindAvailability, 0)
+
+	scope, err := NewScopeWithAncestors(relayParent, baseConstraints, pendingAvailability, maxDepth, ancestors)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, scope.ancestors.Len())
+	assert.Equal(t, 2, len(scope.ancestorsByHash))
+}
+
+func TestCandidateStorageMethods(t *testing.T) {
+	tests := map[string]struct {
+		runTest func(*testing.T)
+	}{
+		"persistedValidationDataMismatch": {
+			runTest: func(t *testing.T) {
+				relayParent := common.BytesToHash(bytes.Repeat([]byte{69}, 32))
+
+				pvd, candidate := makeCommittedCandidate(
+					t,
+					parachaintypes.ParaID(5),
+					relayParent,
+					8,
+					parachaintypes.HeadData{Data: []byte{4, 5, 6}},
+					parachaintypes.HeadData{Data: []byte{1, 2, 3}},
+					7,
+				)
+
+				wrongPvd := pvd
+				wrongPvd.MaxPovSize = 0
+
+				candidateHash, err := candidate.Hash()
+				require.NoError(t, err)
+
+				entry, err := NewCandidateEntry(parachaintypes.CandidateHash{Value: candidateHash},
+					candidate, wrongPvd, Seconded)
+				require.ErrorIs(t, err, ErrPersistedValidationDataMismatch)
+				require.Nil(t, entry)
+			},
+		},
+
+		"zero_length_cycle": {
+			runTest: func(t *testing.T) {
+				relayParent := common.BytesToHash(bytes.Repeat([]byte{69}, 32))
+
+				pvd, candidate := makeCommittedCandidate(
+					t,
+					parachaintypes.ParaID(5),
+					relayParent,
+					8,
+					parachaintypes.HeadData{Data: []byte{4, 5, 6}},
+					parachaintypes.HeadData{Data: []byte{1, 2, 3}},
+					7,
+				)
+
+				candidate.Commitments.HeadData = parachaintypes.HeadData{Data: bytes.Repeat([]byte{1}, 10)}
+				pvd.ParentHead = parachaintypes.HeadData{Data: bytes.Repeat([]byte{1}, 10)}
+				wrongPvdHash, err := pvd.Hash()
+				require.NoError(t, err)
+
+				candidate.Descriptor.PersistedValidationDataHash = wrongPvdHash
+
+				candidateHash, err := candidate.Hash()
+				require.NoError(t, err)
+
+				entry, err := NewCandidateEntry(parachaintypes.CandidateHash{Value: candidateHash},
+					candidate, pvd, Seconded)
+				require.Nil(t, entry)
+				require.ErrorIs(t, err, ErrCandidateEntryZeroLengthCycle)
+			},
+		},
+
+		"add_valid_candidate": {
+			runTest: func(t *testing.T) {
+				relayParent := common.BytesToHash(bytes.Repeat([]byte{69}, 32))
+
+				pvd, candidate := makeCommittedCandidate(
+					t,
+					parachaintypes.ParaID(5),
+					relayParent,
+					8,
+					parachaintypes.HeadData{Data: []byte{4, 5, 6}},
+					parachaintypes.HeadData{Data: []byte{1, 2, 3}},
+					7,
+				)
+
+				hash, err := candidate.Hash()
+				require.NoError(t, err)
+				candidateHash := parachaintypes.CandidateHash{Value: hash}
+
+				parentHeadHash, err := pvd.ParentHead.Hash()
+				require.NoError(t, err)
+
+				entry, err := NewCandidateEntry(candidateHash, candidate, pvd, Seconded)
+				require.NoError(t, err)
+
+				storage := NewCandidateStorage()
+
+				t.Run("add_candidate_entry_as_seconded", func(t *testing.T) {
+					err = storage.addCandidateEntry(entry)
+					require.NoError(t, err)
+					require.True(t, storage.contains(candidateHash))
+
+					// should not have any possible backed candidate yet
+					for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
+						assert.Fail(t, "expected no entries, but found one", entry)
+					}
+
+					require.Equal(t, storage.headDataByHash(candidate.Descriptor.ParaHead),
+						&candidate.Commitments.HeadData)
+					require.Equal(t, storage.headDataByHash(parentHeadHash), &pvd.ParentHead)
+
+					// re-add the candidate should fail
+					err = storage.addCandidateEntry(entry)
+					require.ErrorIs(t, err, ErrCandidateAlradyKnown)
+				})
+
+				t.Run("mark_candidate_entry_as_backed", func(t *testing.T) {
+					storage.markBacked(candidateHash)
+					// marking twice is fine
+					storage.markBacked(candidateHash)
+
+					// here we should have 1 possible backed candidate when we
+					// use the parentHeadHash (parent of our current candidate) to query
+					possibleBackedCandidateHashes := make([]parachaintypes.CandidateHash, 0)
+					for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
+						possibleBackedCandidateHashes = append(possibleBackedCandidateHashes, entry.candidateHash)
+					}
+
+					require.Equal(t, []parachaintypes.CandidateHash{candidateHash}, possibleBackedCandidateHashes)
+
+					// here we should have 0 possible backed candidate because we are
+					// using the candidate hash paraHead as base to query
+					possibleBackedCandidateHashes = make([]parachaintypes.CandidateHash, 0)
+					for entry := range storage.possibleBackedParaChildren(candidate.Descriptor.ParaHead) {
+						possibleBackedCandidateHashes = append(possibleBackedCandidateHashes, entry.candidateHash)
+					}
+
+					require.Empty(t, possibleBackedCandidateHashes)
+				})
+
+				t.Run("remove_candidate_entry", func(t *testing.T) {
+					storage.removeCandidate(candidateHash)
+					// remove it twice should be fine
+					storage.removeCandidate(candidateHash)
+
+					require.False(t, storage.contains(candidateHash))
+
+					// should not have any possible backed candidate anymore
+					for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
+						assert.Fail(t, "expected no entries, but found one", entry)
+					}
+
+					require.Nil(t, storage.headDataByHash(candidate.Descriptor.ParaHead))
+					require.Nil(t, storage.headDataByHash(parentHeadHash))
+				})
+			},
+		},
+
+		"add_pending_availability_candidate": {
+			runTest: func(t *testing.T) {
+				relayParent := common.BytesToHash(bytes.Repeat([]byte{69}, 32))
+
+				pvd, candidate := makeCommittedCandidate(
+					t,
+					parachaintypes.ParaID(5),
+					relayParent,
+					8,
+					parachaintypes.HeadData{Data: []byte{4, 5, 6}},
+					parachaintypes.HeadData{Data: []byte{1, 2, 3}},
+					7,
+				)
+
+				hash, err := candidate.Hash()
+				require.NoError(t, err)
+				candidateHash := parachaintypes.CandidateHash{Value: hash}
+
+				parentHeadHash, err := pvd.ParentHead.Hash()
+				require.NoError(t, err)
+
+				storage := NewCandidateStorage()
+				err = storage.AddPendingAvailabilityCandidate(candidateHash, candidate, pvd)
+				require.NoError(t, err)
+				require.True(t, storage.contains(candidateHash))
+
+				// here we should have 1 possible backed candidate when we
+				// use the parentHeadHash (parent of our current candidate) to query
+				possibleBackedCandidateHashes := make([]parachaintypes.CandidateHash, 0)
+				for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
+					possibleBackedCandidateHashes = append(possibleBackedCandidateHashes, entry.candidateHash)
+				}
+
+				require.Equal(t, []parachaintypes.CandidateHash{candidateHash}, possibleBackedCandidateHashes)
+
+				// here we should have 0 possible backed candidate because we are
+				// using the candidate hash paraHead as base to query
+				possibleBackedCandidateHashes = make([]parachaintypes.CandidateHash, 0)
+				for entry := range storage.possibleBackedParaChildren(candidate.Descriptor.ParaHead) {
+					possibleBackedCandidateHashes = append(possibleBackedCandidateHashes, entry.candidateHash)
+				}
+
+				require.Empty(t, possibleBackedCandidateHashes)
+
+				t.Run("add_seconded_candidate_to_create_fork", func(t *testing.T) {
+					pvd2, candidate2 := makeCommittedCandidate(
+						t,
+						parachaintypes.ParaID(5),
+						relayParent,
+						8,
+						parachaintypes.HeadData{Data: []byte{4, 5, 6}},
+						parachaintypes.HeadData{Data: []byte{2, 3, 4}},
+						7,
+					)
+
+					hash2, err := candidate2.Hash()
+					require.NoError(t, err)
+					candidateHash2 := parachaintypes.CandidateHash{Value: hash2}
+
+					candidateEntry2, err := NewCandidateEntry(candidateHash2, candidate2, pvd2, Seconded)
+					require.NoError(t, err)
+
+					err = storage.addCandidateEntry(candidateEntry2)
+					require.NoError(t, err)
+
+					// here we should have 1 possible backed candidate since
+					// the other candidate is seconded
+					possibleBackedCandidateHashes := make([]parachaintypes.CandidateHash, 0)
+					for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
+						possibleBackedCandidateHashes = append(possibleBackedCandidateHashes, entry.candidateHash)
+					}
+
+					require.Equal(t, []parachaintypes.CandidateHash{candidateHash}, possibleBackedCandidateHashes)
+
+					// now mark it as backed
+					storage.markBacked(candidateHash2)
+
+					// here we should have 1 possible backed candidate since
+					// the other candidate is seconded
+					possibleBackedCandidateHashes = make([]parachaintypes.CandidateHash, 0)
+					for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
+						possibleBackedCandidateHashes = append(possibleBackedCandidateHashes, entry.candidateHash)
+					}
+
+					require.Equal(t, []parachaintypes.CandidateHash{
+						candidateHash, candidateHash2}, possibleBackedCandidateHashes)
+
+				})
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		tt := tt
+		t.Run(name, func(t *testing.T) {
+			tt.runTest(t)
+		})
+	}
+}
+
+func TestInitAndPopulateFromEmpty(t *testing.T) {
+	baseConstraints := makeConstraints(0, []uint{0}, parachaintypes.HeadData{Data: []byte{0x0a}})
+
+	scope, err := NewScopeWithAncestors(
+		inclusionemulator.RelayChainBlockInfo{
+			Number:      1,
+			Hash:        common.BytesToHash(bytes.Repeat([]byte{1}, 32)),
+			StorageRoot: common.BytesToHash(bytes.Repeat([]byte{2}, 32)),
+		},
+		baseConstraints,
+		nil,
+		4,
+		nil,
+	)
+	require.NoError(t, err)
+
+	chain := NewFragmentChain(scope, NewCandidateStorage())
+	assert.Equal(t, 0, chain.BestChainLen())
+	assert.Equal(t, 0, chain.UnconnectedLen())
+
+	newChain := NewFragmentChain(scope, NewCandidateStorage())
+	newChain.PopulateFromPrevious(chain)
+	assert.Equal(t, 0, newChain.BestChainLen())
+	assert.Equal(t, 0, newChain.UnconnectedLen())
+}
+
+func populateFromPreviousStorage(scope *Scope, storage *CandidateStorage) *FragmentChain {
+	chain := NewFragmentChain(scope, NewCandidateStorage())
+
+	// clone the value
+	prevChain := *chain
+	(&prevChain).unconnected = storage.Clone()
+	chain.PopulateFromPrevious(&prevChain)
+	return chain
+}
+
+func TestPopulateAndCheckPotential(t *testing.T) {
+	storage := NewCandidateStorage()
+	paraID := parachaintypes.ParaID(5)
+
+	relayParentAHash := common.BytesToHash(bytes.Repeat([]byte{1}, 32))
+	relayParentBHash := common.BytesToHash(bytes.Repeat([]byte{2}, 32))
+	relayParentCHash := common.BytesToHash(bytes.Repeat([]byte{3}, 32))
+
+	relayParentAInfo := &inclusionemulator.RelayChainBlockInfo{
+		Number: 0, Hash: relayParentAHash, StorageRoot: common.Hash{},
+	}
+
+	relayParentBInfo := &inclusionemulator.RelayChainBlockInfo{
+		Number: 1, Hash: relayParentBHash, StorageRoot: common.Hash{},
+	}
+
+	relayParentCInfo := &inclusionemulator.RelayChainBlockInfo{
+		Number: 2, Hash: relayParentCHash, StorageRoot: common.Hash{},
+	}
+
+	// the ancestors must be in the reverse order
+	ancestors := []inclusionemulator.RelayChainBlockInfo{
+		*relayParentBInfo,
+		*relayParentAInfo,
+	}
+
+	firstParachainHead := parachaintypes.HeadData{Data: []byte{0x0a}}
+	baseConstraints := makeConstraints(0, []uint{0}, firstParachainHead)
+
+	// helper function to hash the candidate and add its entry
+	// into the candidate storage
+	hashAndInsertCandididate := func(t *testing.T, storage *CandidateStorage,
+		candidate parachaintypes.CommittedCandidateReceipt, pvd parachaintypes.PersistedValidationData, state CandidateState) (parachaintypes.CandidateHash, *CandidateEntry) {
+		hash, err := candidate.Hash()
+		require.NoError(t, err)
+		candidateHash := parachaintypes.CandidateHash{Value: hash}
+		entry, err := NewCandidateEntry(candidateHash, candidate, pvd, state)
+		require.NoError(t, err)
+		err = storage.addCandidateEntry(entry)
+		require.NoError(t, err)
+
+		return candidateHash, entry
+	}
+
+	hashAndGetEntry := func(t *testing.T, candidate parachaintypes.CommittedCandidateReceipt,
+		pvd parachaintypes.PersistedValidationData, state CandidateState) (parachaintypes.CandidateHash, *CandidateEntry) {
+		hash, err := candidate.Hash()
+		require.NoError(t, err)
+		candidateHash := parachaintypes.CandidateHash{Value: hash}
+		entry, err := NewCandidateEntry(candidateHash, candidate, pvd, state)
+		require.NoError(t, err)
+		return candidateHash, entry
+	}
+
+	// candidates A -> B -> C are all backed
+	candidateAParaHead := parachaintypes.HeadData{Data: []byte{0x0b}}
+	pvdA, candidateA := makeCommittedCandidate(t, paraID,
+		relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+		firstParachainHead,
+		candidateAParaHead,
+		uint32(relayParentAInfo.Number),
+	)
+
+	candidateAHash, candidateAEntry := hashAndInsertCandididate(t, storage, candidateA, pvdA, Backed)
+
+	candidateBParaHead := parachaintypes.HeadData{Data: []byte{0x0c}}
+	pvdB, candidateB := makeCommittedCandidate(t, paraID,
+		relayParentBInfo.Hash, uint32(relayParentBInfo.Number),
+		candidateAParaHead, // defines candidate A as parent of candidate B
+		candidateBParaHead,
+		uint32(relayParentBInfo.Number),
+	)
+
+	candidateBHash, candidateBEntry := hashAndInsertCandididate(t, storage, candidateB, pvdB, Backed)
+
+	candidateCParaHead := parachaintypes.HeadData{Data: []byte{0x0d}}
+	pvdC, candidateC := makeCommittedCandidate(t, paraID,
+		relayParentCInfo.Hash, uint32(relayParentCInfo.Number),
+		candidateBParaHead,
+		candidateCParaHead,
+		uint32(relayParentCInfo.Number),
+	)
+
+	candidateCHash, candidateCEntry := hashAndInsertCandididate(t, storage, candidateC, pvdC, Backed)
+
+	t.Run("candidate_A_doesnt_adhere_to_base_constraints", func(t *testing.T) {
+		wrongConstraints := []inclusionemulator.Constraints{
+			// define a constraint that requires a parent head data
+			// that is different from candidate A parent head
+			*makeConstraints(relayParentAInfo.Number, []uint{relayParentAInfo.Number}, parachaintypes.HeadData{Data: []byte{0x0e}}),
+
+			// the min relay parent for candidate A is wrong
+			*makeConstraints(relayParentBInfo.Number, []uint{0}, firstParachainHead),
+		}
+
+		for _, wrongConstraint := range wrongConstraints {
+			scope, err := NewScopeWithAncestors(
+				*relayParentCInfo,
+				&wrongConstraint,
+				nil,
+				4,
+				ancestors,
+			)
+			require.NoError(t, err)
+
+			chain := populateFromPreviousStorage(scope, storage)
+			require.Empty(t, chain.BestChainVec())
+
+			// if the min relay parent is wrong, candidate A can never become valid, otherwise
+			// if only the required parent doesnt match, candidate A still a potential candidate
+			if wrongConstraint.MinRelayParentNumber == relayParentBInfo.Number {
+				// if A is not a potential candidate, its decendants will also not be added.
+				require.Equal(t, chain.UnconnectedLen(), 0)
+				err := chain.CanAddCandidateAsPotential(candidateAEntry)
+				require.ErrorIs(t, err, ErrRelayParentNotInScope{
+					relayParentA: relayParentAHash, // candidate A has relay parent A
+					relayParentB: relayParentBHash, // while the constraint is expecting at least relay parent B
+				})
+
+				// however if taken independently, both B and C still have potential
+				err = chain.CanAddCandidateAsPotential(candidateBEntry)
+				require.NoError(t, err)
+				err = chain.CanAddCandidateAsPotential(candidateCEntry)
+				require.NoError(t, err)
+			} else {
+				potentials := make([]parachaintypes.CandidateHash, 0)
+				for unconnected := range chain.Unconnected() {
+					potentials = append(potentials, unconnected.candidateHash)
+				}
+
+				slices.SortStableFunc(potentials, func(i, j parachaintypes.CandidateHash) int {
+					return bytes.Compare(i.Value[:], j.Value[:])
+				})
+
+				require.Equal(t, []parachaintypes.CandidateHash{
+					candidateAHash,
+					candidateCHash,
+					candidateBHash,
+				}, potentials)
+			}
+		}
+	})
+
+	t.Run("depth_cases", func(t *testing.T) {
+		depthCases := map[string]struct {
+			depth               []uint
+			expectedBestChain   []parachaintypes.CandidateHash
+			expectedUnconnected map[parachaintypes.CandidateHash]struct{}
+		}{
+			"0_depth_only_allows_one_candidate_but_keep_the_rest_as_potential": {
+				depth:             []uint{0},
+				expectedBestChain: []parachaintypes.CandidateHash{candidateAHash},
+				expectedUnconnected: map[parachaintypes.CandidateHash]struct{}{
+					candidateBHash: {},
+					candidateCHash: {},
+				},
+			},
+			"1_depth_allow_two_candidates": {
+				depth:             []uint{1},
+				expectedBestChain: []parachaintypes.CandidateHash{candidateAHash, candidateBHash},
+				expectedUnconnected: map[parachaintypes.CandidateHash]struct{}{
+					candidateCHash: {},
+				},
+			},
+			"2_more_depth_allow_all_candidates": {
+				depth:               []uint{2, 3, 4, 5},
+				expectedBestChain:   []parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash},
+				expectedUnconnected: map[parachaintypes.CandidateHash]struct{}{},
+			},
+		}
+
+		for tname, tt := range depthCases {
+			tt := tt
+			t.Run(tname, func(t *testing.T) {
+				// iterate over all the depth values
+				for _, depth := range tt.depth {
+					scope, err := NewScopeWithAncestors(
+						*relayParentCInfo,
+						baseConstraints,
+						nil,
+						depth,
+						ancestors,
+					)
+					require.NoError(t, err)
+
+					chain := NewFragmentChain(scope, NewCandidateStorage())
+					// individually each candidate is a potential candidate
+					require.NoError(t, chain.CanAddCandidateAsPotential(candidateAEntry))
+					require.NoError(t, chain.CanAddCandidateAsPotential(candidateBEntry))
+					require.NoError(t, chain.CanAddCandidateAsPotential(candidateCEntry))
+
+					chain = populateFromPreviousStorage(scope, storage)
+					require.Equal(t, tt.expectedBestChain, chain.BestChainVec())
+
+					// Check that the unconnected candidates are as expected
+					unconnectedHashes := make(map[parachaintypes.CandidateHash]struct{})
+					for unconnected := range chain.Unconnected() {
+						unconnectedHashes[unconnected.candidateHash] = struct{}{}
+					}
+
+					assert.Equal(t, tt.expectedUnconnected, unconnectedHashes)
+				}
+			})
+		}
+	})
+
+	t.Run("relay_parent_out_of_scope", func(t *testing.T) {
+		// candidate A has a relay parent out of scope. Candidates B and C
+		// will also be deleted since they form a chain with A
+		t.Run("candidate_A_relay_parent_out_of_scope", func(t *testing.T) {
+			newAncestors := []inclusionemulator.RelayChainBlockInfo{
+				*relayParentBInfo,
+			}
+
+			scope, err := NewScopeWithAncestors(
+				*relayParentCInfo,
+				baseConstraints,
+				nil,
+				4,
+				newAncestors,
+			)
+			require.NoError(t, err)
+			chain := populateFromPreviousStorage(scope, storage)
+			require.Empty(t, chain.BestChainVec())
+			require.Equal(t, 0, chain.UnconnectedLen())
+
+			require.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateAEntry),
+				ErrRelayParentNotInScope{
+					relayParentA: relayParentAHash,
+					relayParentB: relayParentBHash,
+				})
+
+			// however if taken indepently, both B and C still have potential
+			require.NoError(t, chain.CanAddCandidateAsPotential(candidateBEntry))
+			require.NoError(t, chain.CanAddCandidateAsPotential(candidateCEntry))
+		})
+
+		t.Run("candidate_A_and_B_out_of_scope_C_still_potential", func(t *testing.T) {
+			scope, err := NewScopeWithAncestors(
+				*relayParentCInfo,
+				baseConstraints,
+				nil,
+				4,
+				nil,
+			)
+			require.NoError(t, err)
+			chain := populateFromPreviousStorage(scope, storage)
+			require.Empty(t, chain.BestChainVec())
+			require.Equal(t, 0, chain.UnconnectedLen())
+
+			require.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateAEntry),
+				ErrRelayParentNotInScope{
+					relayParentA: relayParentAHash,
+					relayParentB: relayParentCHash,
+				})
+
+			// however if taken indepently, both B and C still have potential
+			require.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateBEntry),
+				ErrRelayParentNotInScope{
+					relayParentA: relayParentBHash,
+					relayParentB: relayParentCHash,
+				})
+
+			require.NoError(t, chain.CanAddCandidateAsPotential(candidateCEntry))
+		})
+	})
+
+	t.Run("parachain_cycle_not_allowed", func(t *testing.T) {
+		// make C parent of parachain block A
+		modifiedStorage := storage.Clone()
+		modifiedStorage.removeCandidate(candidateCHash)
+
+		wrongPvdC, wrongCandidateC := makeCommittedCandidate(t, paraID,
+			relayParentCInfo.Hash, uint32(relayParentCInfo.Number),
+			candidateBParaHead, // defines candidate B as parent of candidate C
+			firstParachainHead, //  defines this candidate para head output as the parent of candidate A
+			uint32(relayParentCInfo.Number),
+		)
+
+		_, wrongCandidateCEntry := hashAndInsertCandididate(t, modifiedStorage, wrongCandidateC, wrongPvdC, Backed)
+
+		scope, err := NewScopeWithAncestors(
+			*relayParentCInfo,
+			baseConstraints,
+			nil,
+			4,
+			ancestors,
+		)
+		require.NoError(t, err)
+
+		chain := populateFromPreviousStorage(scope, modifiedStorage)
+		require.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash}, chain.BestChainVec())
+		require.Equal(t, 0, chain.UnconnectedLen())
+
+		err = chain.CanAddCandidateAsPotential(wrongCandidateCEntry)
+		require.ErrorIs(t, err, ErrCycle)
+
+		// However, if taken independently, C still has potential, since we don't know A and B.
+		chain = NewFragmentChain(scope, NewCandidateStorage())
+		require.NoError(t, chain.CanAddCandidateAsPotential(wrongCandidateCEntry))
+	})
+
+	t.Run("relay_parent_move_backwards_not_allowed", func(t *testing.T) {
+		// each candidate was build using a different, and contigous, relay parent
+		// in this test we are going to change candidate C to have the same relay
+		// parent of candidate A, given that candidate B is one block ahead.
+		modifiedStorage := storage.Clone()
+		modifiedStorage.removeCandidate(candidateCHash)
+
+		wrongPvdC, wrongCandidateC := makeCommittedCandidate(t, paraID,
+			relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+			candidateBParaHead,
+			candidateCParaHead,
+			0,
+		)
+
+		_, wrongCandidateCEntry := hashAndInsertCandididate(t, modifiedStorage, wrongCandidateC, wrongPvdC, Backed)
+
+		scope, err := NewScopeWithAncestors(*relayParentCInfo, baseConstraints, nil, 4, ancestors)
+		require.NoError(t, err)
+
+		chain := populateFromPreviousStorage(scope, modifiedStorage)
+		require.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash}, chain.BestChainVec())
+		require.Equal(t, 0, chain.UnconnectedLen())
+
+		require.ErrorIs(t, chain.CanAddCandidateAsPotential(wrongCandidateCEntry), ErrRelayParentMovedBackwards)
+	})
+
+	t.Run("unconnected_candidate_C", func(t *testing.T) {
+		// candidate C is an unconnected candidate, C's relay parent is allowed to move
+		// backwards from B's relay parent, because C may latter on trigger a reorg and
+		// B may get removed
+
+		modifiedStorage := storage.Clone()
+		modifiedStorage.removeCandidate(candidateCHash)
+
+		parenteHead := parachaintypes.HeadData{Data: []byte{0x0d}}
+		unconnectedCandidateCHead := parachaintypes.HeadData{Data: []byte{0x0e}}
+
+		unconnectedCPvd, unconnectedCandidateC := makeCommittedCandidate(t, paraID,
+			relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+			parenteHead,
+			unconnectedCandidateCHead,
+			0,
+		)
+
+		unconnectedCandidateCHash, unconnectedCandidateCEntry := hashAndInsertCandididate(t,
+			modifiedStorage, unconnectedCandidateC, unconnectedCPvd, Backed)
+
+		scope, err := NewScopeWithAncestors(
+			*relayParentCInfo,
+			baseConstraints,
+			nil,
+			4,
+			ancestors,
+		)
+		require.NoError(t, err)
+
+		chain := NewFragmentChain(scope, NewCandidateStorage())
+		require.NoError(t, chain.CanAddCandidateAsPotential(unconnectedCandidateCEntry))
+
+		chain = populateFromPreviousStorage(scope, modifiedStorage)
+		require.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash}, chain.BestChainVec())
+
+		unconnected := make(map[parachaintypes.CandidateHash]struct{})
+		for entry := range chain.Unconnected() {
+			unconnected[entry.candidateHash] = struct{}{}
+		}
+
+		require.Equal(t, map[parachaintypes.CandidateHash]struct{}{
+			unconnectedCandidateCHash: {},
+		}, unconnected)
+
+		t.Run("candidate_A_is_pending_availability_candidate_C_should_not_move_backwards", func(t *testing.T) {
+			// candidate A is pending availability and candidate C is an unconnected candidate, C's relay parent
+			// is not allowed to move backwards from A's relay parent because we're sure A will not get remove
+			// in the future, as it's already on-chain (unless it times out availability, a case for which we
+			// don't care to optmise for)
+			modifiedStorage.removeCandidate(candidateAHash)
+			modifiedAPvd, modifiedCandidateA := makeCommittedCandidate(t, paraID,
+				relayParentBInfo.Hash, uint32(relayParentBInfo.Number),
+				firstParachainHead,
+				candidateAParaHead,
+				uint32(relayParentBInfo.Number),
+			)
+
+			modifiedCandidateAHash, _ := hashAndInsertCandididate(t,
+				modifiedStorage, modifiedCandidateA, modifiedAPvd, Backed)
+
+			scope, err := NewScopeWithAncestors(
+				*relayParentCInfo,
+				baseConstraints,
+				[]*PendindAvailability{
+					{CandidateHash: modifiedCandidateAHash, RelayParent: *relayParentBInfo},
+				},
+				4,
+				ancestors,
+			)
+			require.NoError(t, err)
+
+			chain := populateFromPreviousStorage(scope, modifiedStorage)
+			require.Equal(t, []parachaintypes.CandidateHash{modifiedCandidateAHash, candidateBHash}, chain.BestChainVec())
+			require.Equal(t, 0, chain.UnconnectedLen())
+
+			require.ErrorIs(t,
+				chain.CanAddCandidateAsPotential(unconnectedCandidateCEntry),
+				ErrRelayParentPrecedesCandidatePendingAvailability{
+					relayParentA: relayParentAHash,
+					relayParentB: relayParentBHash,
+				})
+		})
+	})
+
+	t.Run("cannot_fork_from_a_candidate_pending_availability", func(t *testing.T) {
+		modifiedStorage := storage.Clone()
+		modifiedStorage.removeCandidate(candidateCHash)
+
+		modifiedStorage.removeCandidate(candidateAHash)
+		modifiedAPvd, modifiedCandidateA := makeCommittedCandidate(t, paraID,
+			relayParentBInfo.Hash, uint32(relayParentBInfo.Number),
+			firstParachainHead,
+			candidateAParaHead,
+			uint32(relayParentBInfo.Number),
+		)
+
+		modifiedCandidateAHash, _ := hashAndInsertCandididate(t,
+			modifiedStorage, modifiedCandidateA, modifiedAPvd, Backed)
+
+		wrongCandidateCHead := parachaintypes.HeadData{Data: []byte{0x01}}
+		wrongPvdC, wrongCandidateC := makeCommittedCandidate(t, paraID,
+			relayParentBInfo.Hash, uint32(relayParentBInfo.Number),
+			firstParachainHead,
+			wrongCandidateCHead,
+			uint32(relayParentBInfo.Number),
+		)
+
+		wrongCandidateCHash, wrongCandidateCEntry := hashAndInsertCandididate(t,
+			modifiedStorage, wrongCandidateC, wrongPvdC, Backed)
+
+		// does not matter if the fork selection rule picks the new candidate
+		// as the modified candidate A is pending availability
+		require.Equal(t, -1, forkSelectionRule(wrongCandidateCHash, modifiedCandidateAHash))
+
+		scope, err := NewScopeWithAncestors(
+			*relayParentCInfo,
+			baseConstraints,
+			[]*PendindAvailability{
+				{
+					CandidateHash: modifiedCandidateAHash,
+					RelayParent:   *relayParentBInfo,
+				},
+			},
+			4,
+			ancestors,
+		)
+		require.NoError(t, err)
+		chain := populateFromPreviousStorage(scope, modifiedStorage)
+		require.Equal(t, []parachaintypes.CandidateHash{modifiedCandidateAHash, candidateBHash}, chain.BestChainVec())
+		require.Equal(t, 0, chain.UnconnectedLen())
+		require.ErrorIs(t, chain.CanAddCandidateAsPotential(wrongCandidateCEntry), ErrForkWithCandidatePendingAvailability{
+			candidateHash: modifiedCandidateAHash,
+		})
+	})
+
+	t.Run("multiple_pending_availability_candidates", func(t *testing.T) {
+		validOptions := [][]*PendindAvailability{
+			{
+				{CandidateHash: candidateAHash, RelayParent: *relayParentAInfo},
+			},
+			{
+				{CandidateHash: candidateAHash, RelayParent: *relayParentAInfo},
+				{CandidateHash: candidateBHash, RelayParent: *relayParentBInfo},
+			},
+			{
+				{CandidateHash: candidateAHash, RelayParent: *relayParentAInfo},
+				{CandidateHash: candidateBHash, RelayParent: *relayParentBInfo},
+				{CandidateHash: candidateCHash, RelayParent: *relayParentCInfo},
+			},
+		}
+
+		for _, pending := range validOptions {
+			scope, err := NewScopeWithAncestors(
+				*relayParentCInfo,
+				baseConstraints,
+				pending,
+				3,
+				ancestors,
+			)
+			require.NoError(t, err)
+
+			chain := populateFromPreviousStorage(scope, storage)
+			assert.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash}, chain.BestChainVec())
+			assert.Equal(t, 0, chain.UnconnectedLen())
+		}
+	})
+
+	t.Run("relay_parents_of_pending_availability_candidates_can_be_out_of_scope", func(t *testing.T) {
+		ancestorsWithoutA := []inclusionemulator.RelayChainBlockInfo{
+			*relayParentBInfo,
+		}
+
+		scope, err := NewScopeWithAncestors(
+			*relayParentCInfo,
+			baseConstraints,
+			[]*PendindAvailability{
+				{CandidateHash: candidateAHash, RelayParent: *relayParentAInfo},
+			},
+			4,
+			ancestorsWithoutA,
+		)
+		require.NoError(t, err)
+
+		chain := populateFromPreviousStorage(scope, storage)
+		assert.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash}, chain.BestChainVec())
+		assert.Equal(t, 0, chain.UnconnectedLen())
+	})
+
+	t.Run("relay_parents_of_pending_availability_candidates_cannot_move_backwards", func(t *testing.T) {
+		scope, err := NewScopeWithAncestors(
+			*relayParentCInfo,
+			baseConstraints,
+			[]*PendindAvailability{
+				{
+					CandidateHash: candidateAHash,
+					RelayParent: inclusionemulator.RelayChainBlockInfo{
+						Hash:        relayParentAInfo.Hash,
+						Number:      1,
+						StorageRoot: relayParentAInfo.StorageRoot,
+					},
+				},
+				{
+					CandidateHash: candidateBHash,
+					RelayParent: inclusionemulator.RelayChainBlockInfo{
+						Hash:        relayParentBInfo.Hash,
+						Number:      0,
+						StorageRoot: relayParentBInfo.StorageRoot,
+					},
+				},
+			},
+			4,
+			[]inclusionemulator.RelayChainBlockInfo{},
+		)
+		require.NoError(t, err)
+
+		chain := populateFromPreviousStorage(scope, storage)
+		assert.Empty(t, chain.BestChainVec())
+		assert.Equal(t, 0, chain.UnconnectedLen())
+	})
+
+	t.Run("more_complex_case_with_multiple_candidates_and_constraints", func(t *testing.T) {
+		scope, err := NewScopeWithAncestors(
+			*relayParentCInfo,
+			baseConstraints,
+			nil,
+			2,
+			ancestors,
+		)
+		require.NoError(t, err)
+
+		// Candidate D
+		pvdD, candidateD := makeCommittedCandidate(t, paraID,
+			relayParentCInfo.Hash, uint32(relayParentCInfo.Number),
+			parachaintypes.HeadData{Data: []byte{0x0d}},
+			parachaintypes.HeadData{Data: []byte{0x0e}},
+			uint32(relayParentCInfo.Number),
+		)
+		candidateDHash, candidateDEntry := hashAndGetEntry(t, candidateD, pvdD, Backed)
+		require.NoError(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateDEntry))
+		require.NoError(t, storage.addCandidateEntry(candidateDEntry))
+
+		// Candidate F
+		pvdF, candidateF := makeCommittedCandidate(t, paraID,
+			relayParentCInfo.Hash, uint32(relayParentCInfo.Number),
+			parachaintypes.HeadData{Data: []byte{0x0f}},
+			parachaintypes.HeadData{Data: []byte{0xf1}},
+			1000,
+		)
+		candidateFHash, candidateFEntry := hashAndGetEntry(t, candidateF, pvdF, Seconded)
+		require.NoError(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateFEntry))
+		require.NoError(t, storage.addCandidateEntry(candidateFEntry))
+
+		// Candidate A1
+		pvdA1, candidateA1 := makeCommittedCandidate(t, paraID,
+			relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+			firstParachainHead,
+			parachaintypes.HeadData{Data: []byte{0xb1}},
+			uint32(relayParentAInfo.Number),
+		)
+		candidateA1Hash, candidateA1Entry := hashAndGetEntry(t, candidateA1, pvdA1, Backed)
+
+		// candidate A1 is created so that its hash is greater than the candidate A hash.
+		require.Equal(t, -1, forkSelectionRule(candidateAHash, candidateA1Hash))
+		require.ErrorIs(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateA1Entry),
+			ErrForkChoiceRule{candidateHash: candidateAHash})
+
+		require.NoError(t, storage.addCandidateEntry(candidateA1Entry))
+
+		// Candidate B1
+		pvdB1, candidateB1 := makeCommittedCandidate(t, paraID,
+			relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+			parachaintypes.HeadData{Data: []byte{0xb1}},
+			parachaintypes.HeadData{Data: []byte{0xc1}},
+			uint32(relayParentAInfo.Number),
+		)
+		_, candidateB1Entry := hashAndGetEntry(t, candidateB1, pvdB1, Seconded)
+		require.NoError(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateB1Entry))
+
+		require.NoError(t, storage.addCandidateEntry(candidateB1Entry))
+
+		// Candidate C1
+		pvdC1, candidateC1 := makeCommittedCandidate(t, paraID,
+			relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+			parachaintypes.HeadData{Data: []byte{0xc1}},
+			parachaintypes.HeadData{Data: []byte{0xd1}},
+			uint32(relayParentAInfo.Number),
+		)
+		_, candidateC1Entry := hashAndGetEntry(t, candidateC1, pvdC1, Backed)
+		require.NoError(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateC1Entry))
+
+		require.NoError(t, storage.addCandidateEntry(candidateC1Entry))
+
+		// Candidate C2
+		pvdC2, candidateC2 := makeCommittedCandidate(t, paraID,
+			relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+			parachaintypes.HeadData{Data: []byte{0xc1}},
+			parachaintypes.HeadData{Data: []byte{0xd2}},
+			uint32(relayParentAInfo.Number),
+		)
+
+		_, candidateC2Entry := hashAndGetEntry(t, candidateC2, pvdC2, Seconded)
+		require.NoError(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateC2Entry))
+		require.NoError(t, storage.addCandidateEntry(candidateC2Entry))
+
+		// Candidate A2
+		pvdA2, candidateA2 := makeCommittedCandidate(t, paraID,
+			relayParentAInfo.Hash, uint32(relayParentAInfo.Number),
+			firstParachainHead,
+			parachaintypes.HeadData{Data: []byte{0x0c9}},
+			uint32(relayParentAInfo.Number),
+		)
+		candidateA2Hash, candidateA2Entry := hashAndGetEntry(t, candidateA2, pvdA2, Seconded)
+
+		require.Equal(t, -1, forkSelectionRule(candidateA2Hash, candidateAHash))
+		require.NoError(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateA2Entry))
+
+		require.NoError(t, storage.addCandidateEntry(candidateA2Entry))
+
+		// Candidate B2
+		pvdB2, candidateB2 := makeCommittedCandidate(t, paraID,
+			relayParentBInfo.Hash, uint32(relayParentBInfo.Number),
+			parachaintypes.HeadData{Data: []byte{0x0c9}},
+			parachaintypes.HeadData{Data: []byte{0xb4}},
+			uint32(relayParentBInfo.Number),
+		)
+		candidateB2Hash, candidateB2Entry := hashAndGetEntry(t, candidateB2, pvdB2, Backed)
+		require.NoError(t, populateFromPreviousStorage(scope, storage).
+			CanAddCandidateAsPotential(candidateB2Entry))
+
+		require.NoError(t, storage.addCandidateEntry(candidateB2Entry))
+
+		chain := populateFromPreviousStorage(scope, storage)
+		assert.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash}, chain.BestChainVec())
+
+		unconnectedHashes := make(map[parachaintypes.CandidateHash]struct{})
+		for unconnected := range chain.Unconnected() {
+			unconnectedHashes[unconnected.candidateHash] = struct{}{}
+		}
+
+		expectedUnconnected := map[parachaintypes.CandidateHash]struct{}{
+			candidateDHash:  {},
+			candidateFHash:  {},
+			candidateA2Hash: {},
+			candidateB2Hash: {},
+		}
+		assert.Equal(t, expectedUnconnected, unconnectedHashes)
+
+		// Cannot add as potential an already present candidate (whether it's in the best chain or in unconnected storage)
+		assert.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateAEntry), ErrCandidateAlradyKnown)
+		assert.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateFEntry), ErrCandidateAlradyKnown)
+	})
 }
