@@ -26,11 +26,11 @@ type ProspectiveCandidate struct {
 }
 
 type ErrDisallowedHrmpWatermark struct {
-	blockNumber uint
+	BlockNumber uint
 }
 
 func (e *ErrDisallowedHrmpWatermark) Error() string {
-	return fmt.Sprintf("DisallowedHrmpWatermark(BlockNumber: %d)", e.blockNumber)
+	return fmt.Sprintf("DisallowedHrmpWatermark(BlockNumber: %d)", e.BlockNumber)
 }
 
 type ErrNoSuchHrmpChannel struct {
@@ -113,11 +113,11 @@ func (e *ErrPersistedValidationDataMismatch) Error() string {
 }
 
 type ErrOutputsInvalid struct {
-	modificationError error
+	ModificationError error
 }
 
 func (e *ErrOutputsInvalid) Error() string {
-	return fmt.Sprintf("OutputsInvalid(ModificationError: %v)", e.modificationError)
+	return fmt.Sprintf("OutputsInvalid(ModificationError: %v)", e.ModificationError)
 }
 
 type ErrCodeSizeTooLarge struct {
@@ -237,7 +237,7 @@ func (c *Constraints) Clone() *Constraints {
 func (c *Constraints) CheckModifications(modifications *ConstraintModifications) error {
 	if modifications.HrmpWatermark != nil && modifications.HrmpWatermark.Type == Trunk {
 		if !slices.Contains(c.HrmpInbound.ValidWatermarks, modifications.HrmpWatermark.Watermark()) {
-			return &ErrDisallowedHrmpWatermark{blockNumber: modifications.HrmpWatermark.Watermark()}
+			return &ErrDisallowedHrmpWatermark{BlockNumber: modifications.HrmpWatermark.Watermark()}
 		}
 	}
 
@@ -319,7 +319,7 @@ func (c *Constraints) ApplyModifications(modifications *ConstraintModifications)
 				newConstraints.HrmpInbound.ValidWatermarks = newConstraints.HrmpInbound.ValidWatermarks[pos:]
 			case Trunk:
 				// Trunk update landing on disallowed watermark is not OK.
-				return nil, &ErrDisallowedHrmpWatermark{blockNumber: modifications.HrmpWatermark.Block}
+				return nil, &ErrDisallowedHrmpWatermark{BlockNumber: modifications.HrmpWatermark.Block}
 			}
 		}
 	}
@@ -759,7 +759,7 @@ func validateAgainstConstraints(
 	}
 
 	if err := constraints.CheckModifications(modifications); err != nil {
-		return &ErrOutputsInvalid{modificationError: err}
+		return &ErrOutputsInvalid{ModificationError: err}
 	}
 
 	return nil

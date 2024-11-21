@@ -214,7 +214,6 @@ func (c *CandidateStorage) markBacked(candidateHash parachaintypes.CandidateHash
 	}
 
 	entry.state = Backed
-	fmt.Println("candidate marked as backed")
 }
 
 func (c *CandidateStorage) contains(candidateHash parachaintypes.CandidateHash) bool {
@@ -604,6 +603,7 @@ func (f *FragmentChain) CandidateBacked(newlyBackedCandidate parachaintypes.Cand
 	}
 
 	parentHeadDataHash := candidateEntry.parentHeadDataHash
+
 	f.unconnected.markBacked(newlyBackedCandidate)
 
 	if !f.revertTo(parentHeadDataHash) {
@@ -1002,7 +1002,7 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 	var cumulativeModifications *inclusionemulator.ConstraintModifications
 	if len(f.bestChain.chain) > 0 {
 		lastCandidate := f.bestChain.chain[len(f.bestChain.chain)-1]
-		cumulativeModifications = lastCandidate.cumulativeModifications
+		cumulativeModifications = lastCandidate.cumulativeModifications.Clone()
 	} else {
 		cumulativeModifications = inclusionemulator.NewConstraintModificationsIdentity()
 	}
@@ -1069,7 +1069,6 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 			// candidates can be out-of-scope.
 			//
 			// earliest relay parent can be before the
-
 			if relayParent.Number < minRelayParent {
 				// relay parent moved backwards
 				continue
