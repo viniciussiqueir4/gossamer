@@ -3,6 +3,8 @@ package fragmentchain
 import (
 	"bytes"
 	"errors"
+	"maps"
+	"math/rand/v2"
 	"slices"
 	"testing"
 
@@ -1895,4 +1897,280 @@ func cloneFragmentChain(original *FragmentChain) *FragmentChain {
 	}
 
 	return clonedFragmentChain
+}
+
+func TestFindAncestorPathAndFindBackableChainEmptyBestChain(t *testing.T) {
+	relayParent := common.BytesToHash(bytes.Repeat([]byte{1}, 32))
+	requiredParent := parachaintypes.HeadData{Data: []byte{0xff}}
+	maxDepth := uint(10)
+
+	// Empty chain
+	baseConstraints := makeConstraints(0, []uint{0}, requiredParent)
+
+	relayParentInfo := inclusionemulator.RelayChainBlockInfo{
+		Number:      0,
+		Hash:        relayParent,
+		StorageRoot: common.Hash{},
+	}
+
+	scope, err := NewScopeWithAncestors(relayParentInfo, baseConstraints, nil, maxDepth, nil)
+	require.NoError(t, err)
+
+	chain := NewFragmentChain(scope, NewCandidateStorage())
+	assert.Equal(t, 0, chain.BestChainLen())
+
+	assert.Equal(t, 0, chain.findAncestorPath(map[parachaintypes.CandidateHash]struct{}{}))
+	assert.Equal(t, []*CandidateAndRelayParent{}, chain.FindBackableChain(map[parachaintypes.CandidateHash]struct{}{}, 2))
+
+	// Invalid candidate
+	ancestors := map[parachaintypes.CandidateHash]struct{}{
+		{Value: common.Hash{}}: {},
+	}
+	assert.Equal(t, 0, chain.findAncestorPath(ancestors))
+	assert.Equal(t, []*CandidateAndRelayParent{}, chain.FindBackableChain(ancestors, 2))
+}
+
+func TestFindAncestorPathAndFindBackableChain(t *testing.T) {
+	paraID := parachaintypes.ParaID(5)
+	relayParent := common.BytesToHash(bytes.Repeat([]byte{1}, 32))
+	requiredParent := parachaintypes.HeadData{Data: []byte{0xff}}
+	maxDepth := uint(5)
+	relayParentNumber := uint32(0)
+	relayParentStorageRoot := common.Hash{}
+
+	type CandidateAndPVD struct {
+		candidate parachaintypes.CommittedCandidateReceipt
+		pvd       parachaintypes.PersistedValidationData
+	}
+
+	candidates := make([]*CandidateAndPVD, 0)
+
+	// candidate 0
+	candidate0Pvd, candidate0 := makeCommittedCandidate(t, paraID,
+		relayParent, 0, requiredParent, parachaintypes.HeadData{Data: []byte{0x00}}, relayParentNumber)
+	candidates = append(candidates, &CandidateAndPVD{candidate: candidate0, pvd: candidate0Pvd})
+
+	// candidate 1 to 5
+	for i := 1; i <= 5; i++ {
+		candidatePvd, candidate := makeCommittedCandidate(t, paraID,
+			relayParent, 0,
+			parachaintypes.HeadData{Data: []byte{byte(i - 1)}},
+			parachaintypes.HeadData{Data: []byte{byte(i)}},
+			relayParentNumber)
+		candidates = append(candidates, &CandidateAndPVD{candidate: candidate, pvd: candidatePvd})
+	}
+
+	storage := NewCandidateStorage()
+
+	for _, c := range candidates {
+		candidateHash, err := c.candidate.Hash()
+		require.NoError(t, err)
+
+		entry, err := NewCandidateEntry(parachaintypes.CandidateHash{Value: candidateHash}, c.candidate, c.pvd, Seconded)
+		require.NoError(t, err)
+
+		err = storage.addCandidateEntry(entry)
+		require.NoError(t, err)
+	}
+
+	candidateHashes := make([]parachaintypes.CandidateHash, 0)
+	for _, c := range candidates {
+		candidateHash, err := c.candidate.Hash()
+		require.NoError(t, err)
+		candidateHashes = append(candidateHashes, parachaintypes.CandidateHash{Value: candidateHash})
+	}
+
+	type Ancestors = map[parachaintypes.CandidateHash]struct{}
+
+	hashes := func(from, to uint) []*CandidateAndRelayParent {
+		var output []*CandidateAndRelayParent
+
+		for i := from; i < to; i++ {
+			output = append(output, &CandidateAndRelayParent{
+				CandidateHash:   candidateHashes[i],
+				RealyParentHash: relayParent,
+			})
+		}
+
+		return output
+	}
+
+	relayParentInfo := inclusionemulator.RelayChainBlockInfo{
+		Number:      uint(relayParentNumber),
+		Hash:        relayParent,
+		StorageRoot: relayParentStorageRoot,
+	}
+
+	baseConstraints := makeConstraints(0, []uint{0}, requiredParent)
+	scope, err := NewScopeWithAncestors(
+		relayParentInfo,
+		baseConstraints,
+		nil,
+		maxDepth,
+		nil,
+	)
+	require.NoError(t, err)
+
+	chain := populateFromPreviousStorage(scope, storage)
+
+	// for now candidates are only seconded, not backed, the best chain is empty
+	// and no candidate will be returned
+
+	require.Equal(t, 6, len(candidateHashes))
+	require.Equal(t, 0, chain.BestChainLen())
+	require.Equal(t, 6, chain.UnconnectedLen())
+
+	for count := 0; count < 10; count++ {
+		require.Equal(t, 0, len(chain.FindBackableChain(make(Ancestors), uint32(count))))
+	}
+
+	t.Run("couple_candidates_backed", func(t *testing.T) {
+		chain := cloneFragmentChain(chain)
+		chain.CandidateBacked(candidateHashes[5])
+
+		for count := 0; count < 10; count++ {
+			require.Equal(t, 0, len(chain.FindBackableChain(make(Ancestors), uint32(count))))
+		}
+
+		chain.CandidateBacked(candidateHashes[3])
+		chain.CandidateBacked(candidateHashes[4])
+
+		for count := 0; count < 10; count++ {
+			require.Equal(t, 0, len(chain.FindBackableChain(make(Ancestors), uint32(count))))
+		}
+
+		chain.CandidateBacked(candidateHashes[1])
+
+		for count := 0; count < 10; count++ {
+			require.Equal(t, 0, len(chain.FindBackableChain(make(Ancestors), uint32(count))))
+		}
+
+		chain.CandidateBacked(candidateHashes[0])
+		require.Equal(t, hashes(0, 1), chain.FindBackableChain(make(Ancestors), 1))
+
+		for c := 2; c < 10; c++ {
+			require.Equal(t, hashes(0, 2), chain.FindBackableChain(make(Ancestors), uint32(c)))
+		}
+
+		// now back the missing piece
+		chain.CandidateBacked(candidateHashes[2])
+		require.Equal(t, 6, chain.BestChainLen())
+
+		for count := 0; count < 10; count++ {
+			var result []*CandidateAndRelayParent
+			if count > 6 {
+				result = hashes(0, 6)
+			} else {
+				for i := 0; i < count && i < 6; i++ {
+					result = append(result, &CandidateAndRelayParent{
+						CandidateHash:   candidateHashes[i],
+						RealyParentHash: relayParent,
+					})
+				}
+			}
+			require.Equal(t, result, chain.FindBackableChain(make(Ancestors), uint32(count)))
+		}
+	})
+
+	t.Run("back_all_candidates_in_random_order", func(t *testing.T) {
+		candidatesShuffled := make([]parachaintypes.CandidateHash, len(candidateHashes))
+		for i := range candidateHashes {
+			candidatesShuffled[i] = parachaintypes.CandidateHash{
+				Value: common.NewHash(candidateHashes[i].Value.ToBytes()),
+			}
+		}
+
+		rand.Shuffle(len(candidatesShuffled), func(i, j int) {
+			candidatesShuffled[i], candidatesShuffled[j] = candidatesShuffled[j], candidatesShuffled[i]
+		})
+
+		for _, c := range candidatesShuffled {
+			chain.CandidateBacked(c)
+			storage.markBacked(c)
+		}
+
+		// no ancestors supplied
+		require.Equal(t, 0, chain.findAncestorPath(make(Ancestors)))
+		require.Equal(t, []*CandidateAndRelayParent(nil), chain.FindBackableChain(make(Ancestors), 0))
+		require.Equal(t, hashes(0, 1), chain.FindBackableChain(make(Ancestors), 1))
+		require.Equal(t, hashes(0, 2), chain.FindBackableChain(make(Ancestors), 2))
+		require.Equal(t, hashes(0, 5), chain.FindBackableChain(make(Ancestors), 5))
+
+		for count := 6; count < 10; count++ {
+			require.Equal(t, hashes(0, 6), chain.FindBackableChain(make(Ancestors), uint32(count)))
+		}
+
+		// ancestors which is not part of the chain will be ignored
+		ancestors := make(Ancestors)
+		ancestors[parachaintypes.CandidateHash{Value: common.Hash{}}] = struct{}{}
+		require.Equal(t, 0, chain.findAncestorPath(ancestors))
+		require.Equal(t, hashes(0, 4), chain.FindBackableChain(ancestors, 4))
+
+		ancestors = make(Ancestors)
+		ancestors[candidateHashes[1]] = struct{}{}
+		ancestors[parachaintypes.CandidateHash{Value: common.Hash{}}] = struct{}{}
+		require.Equal(t, 0, chain.findAncestorPath(ancestors))
+		require.Equal(t, hashes(0, 4), chain.FindBackableChain(ancestors, 4))
+
+		ancestors = make(Ancestors)
+		ancestors[candidateHashes[0]] = struct{}{}
+		ancestors[parachaintypes.CandidateHash{Value: common.Hash{}}] = struct{}{}
+		require.Equal(t, 1, chain.findAncestorPath(maps.Clone(ancestors)))
+		require.Equal(t, hashes(1, 5), chain.FindBackableChain(ancestors, 4))
+
+		// ancestors which are part of the chain but don't form a path from root, will be ignored
+		ancestors = make(Ancestors)
+		ancestors[candidateHashes[1]] = struct{}{}
+		ancestors[candidateHashes[2]] = struct{}{}
+		require.Equal(t, 0, chain.findAncestorPath(maps.Clone(ancestors)))
+		require.Equal(t, hashes(0, 4), chain.FindBackableChain(ancestors, 4))
+
+		// valid ancestors
+		ancestors = make(Ancestors)
+		ancestors[candidateHashes[2]] = struct{}{}
+		ancestors[candidateHashes[0]] = struct{}{}
+		ancestors[candidateHashes[1]] = struct{}{}
+		require.Equal(t, 3, chain.findAncestorPath(maps.Clone(ancestors)))
+		require.Equal(t, hashes(3, 5), chain.FindBackableChain(maps.Clone(ancestors), 2))
+
+		for count := 3; count < 10; count++ {
+			require.Equal(t, hashes(3, 6), chain.FindBackableChain(maps.Clone(ancestors), uint32(count)))
+		}
+
+		// valid ancestors with candidates which have been omitted due to timeouts
+		ancestors = make(Ancestors)
+		ancestors[candidateHashes[0]] = struct{}{}
+		ancestors[candidateHashes[2]] = struct{}{}
+		require.Equal(t, 1, chain.findAncestorPath(maps.Clone(ancestors)))
+		require.Equal(t, hashes(1, 4), chain.FindBackableChain(maps.Clone(ancestors), 3))
+		require.Equal(t, hashes(1, 5), chain.FindBackableChain(maps.Clone(ancestors), 4))
+
+		for count := 5; count < 10; count++ {
+			require.Equal(t, hashes(1, 6), chain.FindBackableChain(maps.Clone(ancestors), uint32(count)))
+		}
+
+		ancestors = make(Ancestors)
+		ancestors[candidateHashes[0]] = struct{}{}
+		ancestors[candidateHashes[1]] = struct{}{}
+		ancestors[candidateHashes[3]] = struct{}{}
+		require.Equal(t, 2, chain.findAncestorPath(maps.Clone(ancestors)))
+		require.Equal(t, hashes(2, 6), chain.FindBackableChain(maps.Clone(ancestors), 4))
+
+		require.Equal(t, hashes(0, 0), chain.FindBackableChain(maps.Clone(ancestors), 0))
+
+		// stop when we've found a candidate which is pending availability
+		scope, err := NewScopeWithAncestors(relayParentInfo, baseConstraints,
+			[]*PendindAvailability{
+				{CandidateHash: candidateHashes[3], RelayParent: relayParentInfo},
+			},
+			maxDepth,
+			nil,
+		)
+		require.NoError(t, err)
+		chain = populateFromPreviousStorage(scope, storage)
+		ancestors = make(Ancestors)
+		ancestors[candidateHashes[0]] = struct{}{}
+		ancestors[candidateHashes[1]] = struct{}{}
+		require.Equal(t, hashes(2, 3), chain.FindBackableChain(maps.Clone(ancestors), 3))
+	})
 }

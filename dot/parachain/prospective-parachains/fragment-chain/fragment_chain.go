@@ -700,6 +700,7 @@ func (f *FragmentChain) FindBackableChain(
 	}
 
 	basePos := f.findAncestorPath(ancestors)
+
 	actualEndIdx := min(basePos+int(count), len(f.bestChain.chain))
 	res := make([]*CandidateAndRelayParent, 0, actualEndIdx-basePos)
 
