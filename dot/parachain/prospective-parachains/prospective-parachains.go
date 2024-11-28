@@ -149,6 +149,7 @@ func (*ProspectiveParachains) Name() parachaintypes.SubSystemName {
 func NewProspectiveParachains(overseerChan chan<- any) *ProspectiveParachains {
 	prospectiveParachain := ProspectiveParachains{
 		SubsystemToOverseer: overseerChan,
+		View:                NewView(),
 	}
 	return &prospectiveParachain
 }
