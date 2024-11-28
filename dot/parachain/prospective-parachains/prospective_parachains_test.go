@@ -131,4 +131,16 @@ func TestHandleIntroduceSecondedCandidate(
 	validationCodeHash := parachaintypes.ValidationCodeHash{0x01}
 	candidateRelayParentNumber := uint32(1)
 
+	candidate := MakeCandidate(
+		candidateRelayParent,
+		candidateRelayParentNumber,
+		paraId,
+		parentHead,
+		headData,
+		validationCodeHash,
+	)
+
+	pvd := dummyPVD(parentHead, candidateRelayParentNumber)
+
+	introduceSecondedCandidate(candidate, pvd)
 }
