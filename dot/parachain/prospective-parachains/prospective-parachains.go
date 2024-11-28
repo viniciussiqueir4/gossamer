@@ -137,6 +137,7 @@ func HandleIntroduceSecondedCandidate(
 
 type ProspectiveParachains struct {
 	SubsystemToOverseer chan<- any
+	View                *View
 }
 
 // Name returns the name of the subsystem
@@ -178,8 +179,11 @@ func (pp *ProspectiveParachains) processMessage(msg any) {
 	case parachaintypes.BlockFinalizedSignal:
 		_ = pp.ProcessBlockFinalizedSignal(msg)
 	case IntroduceSecondedCandidate:
-		msg.Response <- true
-		panic("not implemented yet: see issue #4308")
+		HandleIntroduceSecondedCandidate(
+			pp.View,
+			msg.IntroduceSecondedCandidateRequest,
+			msg.Response,
+		)
 	case CandidateBacked:
 		panic("not implemented yet: see issue #4309")
 	case GetBackableCandidates:
