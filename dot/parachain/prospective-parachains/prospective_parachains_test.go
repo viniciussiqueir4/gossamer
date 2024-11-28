@@ -1,10 +1,12 @@
 package prospectiveparachains
 
 import (
+	"context"
 	"testing"
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	"github.com/ChainSafe/gossamer/lib/common"
+	"github.com/stretchr/testify/assert"
 )
 
 const MAX_POV_SIZE = 1_000_000
@@ -80,6 +82,8 @@ func MakeCandidate(
 }
 
 func introduceSecondedCandidate(
+	t *testing.T,
+	overseerToSubsystem chan any,
 	candidate parachaintypes.CommittedCandidateReceipt,
 	pvd parachaintypes.PersistedValidationData,
 ) {
@@ -93,14 +97,16 @@ func introduceSecondedCandidate(
 
 	msg := IntroduceSecondedCandidate{
 		IntroduceSecondedCandidateRequest: req,
+		Response:                          response,
 	}
 
-	msg.Response = response
+	overseerToSubsystem <- msg
 
-	<-response
+	assert.True(t, <-response)
 }
 
 func introduceSecondedCandidateFailed(
+	overseeChan chan any,
 	candidate parachaintypes.CommittedCandidateReceipt,
 	pvd parachaintypes.PersistedValidationData,
 ) {
@@ -142,5 +148,12 @@ func TestHandleIntroduceSecondedCandidate(
 
 	pvd := dummyPVD(parentHead, candidateRelayParentNumber)
 
-	introduceSecondedCandidate(candidate, pvd)
+	subsystemToOverseer := make(chan any)
+	overseerToSubsystem := make(chan any)
+
+	prospectiveParachains := NewProspectiveParachains(subsystemToOverseer)
+
+	prospectiveParachains.Run(context.Background(), overseerToSubsystem)
+
+	introduceSecondedCandidate(t, overseerToSubsystem, candidate, pvd)
 }
