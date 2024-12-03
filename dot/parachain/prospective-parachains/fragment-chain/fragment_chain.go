@@ -1013,7 +1013,7 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 		return
 	}
 
-	for len(f.bestChain.chain) > int(f.scope.maxDepth) {
+	for len(f.bestChain.chain) < int(f.scope.maxDepth) {
 
 		childConstraints, err := f.scope.baseConstraints.ApplyModifications(cumulativeModifications)
 		if err != nil {
@@ -1121,7 +1121,6 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 
 		// update the cumulative constraint modifications
 		cumulativeModifications.Stack(bestCandidate.fragment.ConstraintModifications())
-
 		// update the earliest relay parent
 		earliestRelayParent = &inclusionemulator.RelayChainBlockInfo{
 			Hash:        bestCandidate.fragment.RelayParent().Hash,

@@ -159,7 +159,10 @@ func (pp *ProspectiveParachains) Run(ctx context.Context, overseerToSubsystem <-
 	for {
 		select {
 		case msg := <-overseerToSubsystem:
-			pp.processMessage(msg)
+			shouldFinish := pp.processMessage(msg)
+			if shouldFinish {
+				return
+			}
 		case <-ctx.Done():
 			if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
 				logger.Errorf("ctx error: %s\n", err)
@@ -169,12 +172,15 @@ func (pp *ProspectiveParachains) Run(ctx context.Context, overseerToSubsystem <-
 	}
 }
 
-func (*ProspectiveParachains) Stop() {}
+func (pp *ProspectiveParachains) Stop() {
+	close(pp.SubsystemToOverseer)
+}
 
-func (pp *ProspectiveParachains) processMessage(msg any) {
+func (pp *ProspectiveParachains) processMessage(msg any) bool {
 	switch msg := msg.(type) {
 	case parachaintypes.Conclude:
 		pp.Stop()
+		return true
 	case parachaintypes.ActiveLeavesUpdateSignal:
 		_ = pp.ProcessActiveLeavesUpdateSignal(msg)
 	case parachaintypes.BlockFinalizedSignal:
@@ -186,7 +192,7 @@ func (pp *ProspectiveParachains) processMessage(msg any) {
 			msg.Response,
 		)
 	case CandidateBacked:
-		panic("not implemented yet: see issue #4309")
+		pp.HandleCandidateBacked(*pp.View, msg.ParaId, msg.CandidateHash)
 	case GetBackableCandidates:
 		panic("not implemented yet: see issue #4310")
 	case GetHypotheticalMembership:
@@ -199,6 +205,7 @@ func (pp *ProspectiveParachains) processMessage(msg any) {
 		logger.Errorf("%w: %T", parachaintypes.ErrUnknownOverseerMessage, msg)
 	}
 
+	return false
 }
 
 // ProcessActiveLeavesUpdateSignal processes active leaves update signal
@@ -210,4 +217,48 @@ func (pp *ProspectiveParachains) ProcessActiveLeavesUpdateSignal(parachaintypes.
 func (*ProspectiveParachains) ProcessBlockFinalizedSignal(parachaintypes.BlockFinalizedSignal) error {
 	// NOTE: this subsystem does not process block finalized signal
 	return nil
+}
+
+func (*ProspectiveParachains) HandleCandidateBacked(
+	view View,
+	para parachaintypes.ParaID,
+	candidateHash parachaintypes.CandidateHash,
+	// metrics # to do
+) {
+	foundCandidate := false
+	foundPara := false
+
+	for relayParent, rpData := range view.PerRelayParent {
+		chain, ok := rpData.FragmentChains[para]
+		if !ok {
+			continue
+		}
+
+		_, isActiveLeaf := view.ActiveLeaves[relayParent]
+
+		foundPara = true
+		if chain.IsCandidateBacked(candidateHash) {
+			logger.Debugf("para = %s, candidateHash = %s, isActiveLeaf = %s, Received redundant instruction to mark as backed an already backed candidate", para, candidateHash, isActiveLeaf)
+			foundCandidate = true
+		} else if chain.ContainsUnconnectedCandidate(candidateHash) {
+			foundCandidate = true
+			chain.CandidateBacked(candidateHash)
+
+			candidatedHashes := []parachaintypes.CandidateHash{}
+			for candidate := range chain.Unconnected() {
+				candidatedHashes = append(candidatedHashes, candidate.Hash())
+			}
+
+			logger.Tracef("relayParent = %s, para = %s, candidateHash = %s, isActiveLeaf = %s, Candidate backed. Candidate chain for para: %v", relayParent, para, candidateHash, isActiveLeaf, chain.BestChainVec())
+			logger.Tracef("relayParent = %s, para = %s, candidateHash = %s, isActiveLeaf = %s, Potential candidate storage for para: %v", relayParent, para, candidateHash, isActiveLeaf, candidatedHashes)
+		}
+
+		if !foundPara {
+			logger.Warnf("para = %s, candidateHash = %s, Received instruction to back a candidate for unscheduled para", para, candidateHash)
+			return
+		}
+		if !foundCandidate {
+			logger.Debugf("para = %s, candidateHash = %s, Received instruction to back unknown candidate", para, candidateHash)
+		}
+	}
 }

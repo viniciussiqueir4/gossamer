@@ -3,6 +3,7 @@ package prospectiveparachains
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 
 	fragmentchain "github.com/ChainSafe/gossamer/dot/parachain/prospective-parachains/fragment-chain"
@@ -286,4 +287,110 @@ func TestHandleIntroduceSecondedCandidate(
 	go prospectiveParachains.Run(context.Background(), overseerToSubsystem)
 
 	introduceSecondedCandidate(t, overseerToSubsystem, candidate, pvd)
+}
+
+func markCandidatedBacked(
+	t *testing.T,
+	overseerToSubsystem chan any,
+	candidate parachaintypes.CommittedCandidateReceipt,
+) {
+	hash, err := candidate.Hash()
+
+	assert.NoError(t, err)
+
+	msg := CandidateBacked{
+		ParaId:        candidate.Descriptor.ParaID,
+		CandidateHash: parachaintypes.CandidateHash{Value: hash},
+	}
+
+	overseerToSubsystem <- msg
+}
+
+func TestHandleBacked(
+	t *testing.T,
+) {
+	candidateRelayParent := common.Hash{0x01}
+	paraId := parachaintypes.ParaID(1)
+	parentHead := parachaintypes.HeadData{
+		Data: bytes.Repeat([]byte{0x01}, 32),
+	}
+	headData := parachaintypes.HeadData{
+		Data: bytes.Repeat([]byte{0x02}, 32),
+	}
+	validationCodeHash := parachaintypes.ValidationCodeHash{0x01}
+	candidateRelayParentNumber := uint32(0)
+
+	candidate := MakeCandidate(
+		candidateRelayParent,
+		candidateRelayParentNumber,
+		paraId,
+		parentHead,
+		headData,
+		validationCodeHash,
+	)
+
+	pvd := dummyPVD(parentHead, candidateRelayParentNumber)
+
+	subsystemToOverseer := make(chan any)
+	overseerToSubsystem := make(chan any)
+
+	prospectiveParachains := NewProspectiveParachains(subsystemToOverseer)
+
+	relayParent := inclusionemulator.RelayChainBlockInfo{
+		Hash:        candidateRelayParent,
+		Number:      0,
+		StorageRoot: common.Hash{0x00},
+	}
+
+	baseConstraints := &inclusionemulator.Constraints{
+		RequiredParent:       parachaintypes.HeadData{Data: bytes.Repeat([]byte{0x01}, 32)},
+		MinRelayParentNumber: 0,
+		ValidationCodeHash:   validationCodeHash,
+		MaxPoVSize:           1000000,
+	}
+
+	scope, err := fragmentchain.NewScopeWithAncestors(relayParent, baseConstraints, nil, 10, nil)
+	assert.NoError(t, err)
+
+	prospectiveParachains.View.PerRelayParent[candidateRelayParent] = RelayBlockViewData{
+		FragmentChains: map[parachaintypes.ParaID]fragmentchain.FragmentChain{
+			paraId: *fragmentchain.NewFragmentChain(scope, fragmentchain.NewCandidateStorage()),
+		},
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func(wg *sync.WaitGroup) {
+		defer wg.Done()
+		prospectiveParachains.Run(context.Background(), overseerToSubsystem)
+	}(&wg)
+
+	introduceSecondedCandidate(t, overseerToSubsystem, candidate, pvd)
+
+	markCandidatedBacked(t, overseerToSubsystem, candidate)
+
+	overseerToSubsystem <- parachaintypes.Conclude{}
+
+	wg.Wait()
+
+	chains := prospectiveParachains.View.GetFragmentChains(candidateRelayParent)
+
+	fragmentChain, exist := chains[paraId]
+
+	assert.True(t, exist)
+
+	hash, err := candidate.Hash()
+	assert.NoError(t, err)
+
+	isCandidateBacked := fragmentChain.IsCandidateBacked(parachaintypes.CandidateHash{Value: hash})
+
+	assert.True(t, isCandidateBacked)
+
+	hashes := fragmentChain.BestChainVec()
+
+	assert.Len(t, hashes, 1)
+
+	assert.Equal(t, hashes[0], parachaintypes.CandidateHash{Value: hash})
+
 }
