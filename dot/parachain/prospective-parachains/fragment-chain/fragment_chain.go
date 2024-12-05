@@ -9,9 +9,12 @@ import (
 
 	parachaintypes "github.com/ChainSafe/gossamer/dot/parachain/types"
 	inclusionemulator "github.com/ChainSafe/gossamer/dot/parachain/util/inclusion-emulator"
+	"github.com/ChainSafe/gossamer/internal/log"
 	"github.com/ChainSafe/gossamer/lib/common"
 	"github.com/tidwall/btree"
 )
+
+var logger = log.NewFromGlobal(log.AddContext("pkg", "fragment_chain"), log.SetLevel(log.Debug))
 
 type CandidateState int
 
@@ -24,8 +27,7 @@ func forkSelectionRule(hash1, hash2 parachaintypes.CandidateHash) int {
 	return bytes.Compare(hash1.Value[:], hash2.Value[:])
 }
 
-// CandidateEntry represents a candidate into the CandidateStorage
-// TODO: Should CandidateEntry implements `HypotheticalOrConcreteCandidate`
+// CandidateEntry represents a candidate in the CandidateStorage
 type CandidateEntry struct {
 	candidateHash      parachaintypes.CandidateHash
 	parentHeadDataHash common.Hash
@@ -56,7 +58,7 @@ func NewCandidateEntry(
 		return nil, ErrPersistedValidationDataMismatch
 	}
 
-	parendHeadDataHash, err := persistedValidationData.ParentHead.Hash()
+	parentHeadDataHash, err := persistedValidationData.ParentHead.Hash()
 	if err != nil {
 		return nil, fmt.Errorf("while hashing parent head data: %w", err)
 	}
@@ -66,13 +68,13 @@ func NewCandidateEntry(
 		return nil, fmt.Errorf("while hashing output head data: %w", err)
 	}
 
-	if parendHeadDataHash == outputHeadDataHash {
-		return nil, ErrCandidateEntryZeroLengthCycle
+	if parentHeadDataHash == outputHeadDataHash {
+		return nil, ErrZeroLengthCycle
 	}
 
 	return &CandidateEntry{
 		candidateHash:      candidateHash,
-		parentHeadDataHash: parendHeadDataHash,
+		parentHeadDataHash: parentHeadDataHash,
 		outputHeadDataHash: outputHeadDataHash,
 		relayParent:        candidate.Descriptor.RelayParent,
 		state:              state,
@@ -159,12 +161,12 @@ func (c *CandidateStorage) Len() int {
 func (c *CandidateStorage) addCandidateEntry(candidate *CandidateEntry) error {
 	_, ok := c.byCandidateHash[candidate.candidateHash]
 	if ok {
-		return ErrCandidateAlradyKnown
+		return ErrCandidateAlreadyKnown
 	}
 
 	// updates the reference parent hash -> candidate
 	// we don't check the `ok` value since the key can
-	// exists in the map but pointing to a nil hashset
+	// exists in the map but pointing to a nil map
 	setOfCandidates := c.byParentHead[candidate.parentHeadDataHash]
 	if setOfCandidates == nil {
 		setOfCandidates = make(map[parachaintypes.CandidateHash]any)
@@ -210,7 +212,7 @@ func (c *CandidateStorage) removeCandidate(candidateHash parachaintypes.Candidat
 func (c *CandidateStorage) markBacked(candidateHash parachaintypes.CandidateHash) {
 	entry, ok := c.byCandidateHash[candidateHash]
 	if !ok {
-		fmt.Println("candidate not found while marking as backed")
+		logger.Tracef("candidate not found while marking as backed")
 	}
 
 	entry.state = Backed
@@ -274,9 +276,9 @@ func (c *CandidateStorage) possibleBackedParaChildren(parentHeadHash common.Hash
 	}
 }
 
-// PendindAvailability is a candidate on-chain but pending availability, for special
+// PendingAvailability is a candidate on-chain but pending availability, for special
 // treatment in the `Scope`
-type PendindAvailability struct {
+type PendingAvailability struct {
 	CandidateHash parachaintypes.CandidateHash
 	RelayParent   inclusionemulator.RelayChainBlockInfo
 }
@@ -292,15 +294,15 @@ type Scope struct {
 	// mapped by hash
 	ancestorsByHash map[common.Hash]inclusionemulator.RelayChainBlockInfo
 	// candidates pending availability at this block
-	pendindAvailability []*PendindAvailability
+	pendingAvailability []*PendingAvailability
 	// the base constraints derived from the latest included candidate
-	baseConstraints *inclusionemulator.Constraints
+	baseConstraints *parachaintypes.Constraints
 	// equal to `max_candidate_depth`
 	maxDepth uint
 }
 
 // NewScopeWithAncestors defines a new scope, all arguments are straightforward
-// expect ancestors. Ancestor should be in reverse order, starting with the parent
+// except ancestors. Ancestor should be in reverse order, starting with the parent
 // of the relayParent, and proceeding backwards in block number decrements of 1.
 // Ancestors not following these conditions will be rejected.
 //
@@ -311,8 +313,8 @@ type Scope struct {
 // should be provided. It is allowed to provide 0 ancestors.
 func NewScopeWithAncestors(
 	relayParent inclusionemulator.RelayChainBlockInfo,
-	baseConstraints *inclusionemulator.Constraints,
-	pendingAvailability []*PendindAvailability,
+	baseConstraints *parachaintypes.Constraints,
+	pendingAvailability []*PendingAvailability,
 	maxDepth uint,
 	ancestors []inclusionemulator.RelayChainBlockInfo,
 ) (*Scope, error) {
@@ -341,7 +343,7 @@ func NewScopeWithAncestors(
 	return &Scope{
 		relayParent:         relayParent,
 		baseConstraints:     baseConstraints,
-		pendindAvailability: pendingAvailability,
+		pendingAvailability: pendingAvailability,
 		maxDepth:            maxDepth,
 		ancestors:           ancestorsMap,
 		ancestorsByHash:     ancestorsByHash,
@@ -370,8 +372,8 @@ func (s *Scope) Ancestor(hash common.Hash) *inclusionemulator.RelayChainBlockInf
 }
 
 // Whether the candidate in question is one pending availability in this scope.
-func (s *Scope) GetPendingAvailability(candidateHash parachaintypes.CandidateHash) *PendindAvailability {
-	for _, c := range s.pendindAvailability {
+func (s *Scope) GetPendingAvailability(candidateHash parachaintypes.CandidateHash) *PendingAvailability {
+	for _, c := range s.pendingAvailability {
 		if c.CandidateHash == candidateHash {
 			return c
 		}
@@ -623,7 +625,7 @@ func (f *FragmentChain) CandidateBacked(newlyBackedCandidate parachaintypes.Cand
 func (f *FragmentChain) CanAddCandidateAsPotential(entry *CandidateEntry) error {
 	candidateHash := entry.candidateHash
 	if f.bestChain.Contains(candidateHash) || f.unconnected.contains(candidateHash) {
-		return ErrCandidateAlradyKnown
+		return ErrCandidateAlreadyKnown
 	}
 
 	return f.checkPotential(entry)
@@ -845,7 +847,7 @@ func (f *FragmentChain) checkPotential(candidate *CandidateEntry) error {
 
 	// Try seeing if the parent candidate is in the current chain or if it is the latest
 	// included candidate. If so, get the constraints the candidate must satisfy
-	var constraints *inclusionemulator.Constraints
+	var constraints *parachaintypes.Constraints
 	var maybeMinRelayParentNumber *uint
 
 	requiredParentHash, err := f.scope.baseConstraints.RequiredParent.Hash()
@@ -868,7 +870,9 @@ func (f *FragmentChain) checkPotential(candidate *CandidateEntry) error {
 		}
 
 		var err error
-		constraints, err = f.scope.baseConstraints.ApplyModifications(parentCandidate.cumulativeModifications)
+		constraints, err = inclusionemulator.ApplyModifications(
+			f.scope.baseConstraints,
+			parentCandidate.cumulativeModifications)
 		if err != nil {
 			return ErrComputeConstraints{modificationErr: err}
 		}
@@ -914,7 +918,7 @@ func (f *FragmentChain) checkPotential(candidate *CandidateEntry) error {
 
 // trimUneligibleForks once the backable chain was populated, trim the forks generated by candidate
 // hashes which are not present in the best chain. Fan this out into a full breadth-first search. If
-// starting point is not nil then start the search from the candidates haing this parent head hash.
+// starting point is not nil then start the search from the candidates having this parent head hash.
 func (f *FragmentChain) trimUneligibleForks(storage *CandidateStorage, startingPoint *common.Hash) {
 	type queueItem struct {
 		hash         common.Hash
@@ -1014,7 +1018,8 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 	}
 
 	for len(f.bestChain.chain) < int(f.scope.maxDepth) {
-		childConstraints, err := f.scope.baseConstraints.ApplyModifications(cumulativeModifications)
+		childConstraints, err := inclusionemulator.ApplyModifications(
+			f.scope.baseConstraints, cumulativeModifications)
 		if err != nil {
 			// TODO: include logger
 			fmt.Println("failed to apply modifications:", err)

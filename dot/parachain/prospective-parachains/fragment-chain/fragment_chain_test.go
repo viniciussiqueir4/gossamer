@@ -270,7 +270,7 @@ func TestEarliestRelayParent(t *testing.T) {
 					Hash:   common.Hash{0x01},
 					Number: 10,
 				}
-				baseConstraints := &inclusionemulator.Constraints{
+				baseConstraints := &parachaintypes.Constraints{
 					MinRelayParentNumber: 5,
 				}
 				ancestor := inclusionemulator.RelayChainBlockInfo{
@@ -296,7 +296,7 @@ func TestEarliestRelayParent(t *testing.T) {
 					Hash:   common.Hash{0x01},
 					Number: 10,
 				}
-				baseConstraints := &inclusionemulator.Constraints{
+				baseConstraints := &parachaintypes.Constraints{
 					MinRelayParentNumber: 5,
 				}
 				return &Scope{
@@ -435,7 +435,7 @@ func TestFragmentChainWithFreshScope(t *testing.T) {
 		StorageRoot: common.Hash{0x00},
 	}
 
-	baseConstraints := &inclusionemulator.Constraints{
+	baseConstraints := &parachaintypes.Constraints{
 		RequiredParent:       parachaintypes.HeadData{Data: []byte{byte(0)}},
 		MinRelayParentNumber: 0,
 		ValidationCodeHash:   parachaintypes.ValidationCodeHash(common.Hash{0x03}),
@@ -488,8 +488,8 @@ func makeConstraints(
 	minRelayParentNumber uint,
 	validWatermarks []uint,
 	requiredParent parachaintypes.HeadData,
-) *inclusionemulator.Constraints {
-	return &inclusionemulator.Constraints{
+) *parachaintypes.Constraints {
+	return &parachaintypes.Constraints{
 		MinRelayParentNumber:  minRelayParentNumber,
 		MaxPoVSize:            1_000_000,
 		MaxCodeSize:           1_000_000,
@@ -497,10 +497,10 @@ func makeConstraints(
 		UmpRemainingBytes:     1_000,
 		MaxUmpNumPerCandidate: 10,
 		DmpRemainingMessages:  make([]uint, 10),
-		HrmpInbound: inclusionemulator.InboundHrmpLimitations{
+		HrmpInbound: parachaintypes.InboundHrmpLimitations{
 			ValidWatermarks: validWatermarks,
 		},
-		HrmpChannelsOut:        make(map[parachaintypes.ParaID]inclusionemulator.OutboundHrmpChannelLimitations),
+		HrmpChannelsOut:        make(map[parachaintypes.ParaID]parachaintypes.OutboundHrmpChannelLimitations),
 		MaxHrmpNumPerCandidate: 0,
 		RequiredParent:         requiredParent,
 		ValidationCodeHash:     parachaintypes.ValidationCodeHash(common.BytesToHash(bytes.Repeat([]byte{42}, 32))),
@@ -564,8 +564,8 @@ func TestScopeRejectsAncestors(t *testing.T) {
 		relayParent         *inclusionemulator.RelayChainBlockInfo
 		ancestors           []inclusionemulator.RelayChainBlockInfo
 		maxDepth            uint
-		baseConstraints     *inclusionemulator.Constraints
-		pendingAvailability []*PendindAvailability
+		baseConstraints     *parachaintypes.Constraints
+		pendingAvailability []*PendingAvailability
 		expectedError       error
 	}{
 		"rejects_ancestor_that_skips_blocks": {
@@ -584,7 +584,7 @@ func TestScopeRejectsAncestors(t *testing.T) {
 			maxDepth: 2,
 			baseConstraints: makeConstraints(8, []uint{8, 9},
 				parachaintypes.HeadData{Data: []byte{0x01, 0x02, 0x03}}),
-			pendingAvailability: make([]*PendindAvailability, 0),
+			pendingAvailability: make([]*PendingAvailability, 0),
 			expectedError:       ErrUnexpectedAncestor{Number: 8, Prev: 10},
 		},
 		"rejects_ancestor_for_zero_block": {
@@ -602,7 +602,7 @@ func TestScopeRejectsAncestors(t *testing.T) {
 			},
 			maxDepth:            2,
 			baseConstraints:     makeConstraints(0, []uint{}, parachaintypes.HeadData{Data: []byte{1, 2, 3}}),
-			pendingAvailability: make([]*PendindAvailability, 0),
+			pendingAvailability: make([]*PendingAvailability, 0),
 			expectedError:       ErrUnexpectedAncestor{Number: 99999, Prev: 0},
 		},
 		"rejects_unordered_ancestors": {
@@ -630,7 +630,7 @@ func TestScopeRejectsAncestors(t *testing.T) {
 			},
 			maxDepth:            2,
 			baseConstraints:     makeConstraints(0, []uint{2}, parachaintypes.HeadData{Data: []byte{1, 2, 3}}),
-			pendingAvailability: make([]*PendindAvailability, 0),
+			pendingAvailability: make([]*PendingAvailability, 0),
 			expectedError:       ErrUnexpectedAncestor{Number: 2, Prev: 4},
 		},
 	}
@@ -672,7 +672,7 @@ func TestScopeOnlyTakesAncestorsUpToMin(t *testing.T) {
 
 	maxDepth := uint(2)
 	baseConstraints := makeConstraints(0, []uint{2}, parachaintypes.HeadData{Data: []byte{1, 2, 3}})
-	pendingAvailability := make([]*PendindAvailability, 0)
+	pendingAvailability := make([]*PendingAvailability, 0)
 
 	scope, err := NewScopeWithAncestors(relayParent, baseConstraints, pendingAvailability, maxDepth, ancestors)
 	require.NoError(t, err)
@@ -739,7 +739,7 @@ func TestCandidateStorageMethods(t *testing.T) {
 				entry, err := NewCandidateEntry(parachaintypes.CandidateHash{Value: candidateHash},
 					candidate, pvd, Seconded)
 				require.Nil(t, entry)
-				require.ErrorIs(t, err, ErrCandidateEntryZeroLengthCycle)
+				require.ErrorIs(t, err, ErrZeroLengthCycle)
 			},
 		},
 
@@ -785,7 +785,7 @@ func TestCandidateStorageMethods(t *testing.T) {
 
 					// re-add the candidate should fail
 					err = storage.addCandidateEntry(entry)
-					require.ErrorIs(t, err, ErrCandidateAlradyKnown)
+					require.ErrorIs(t, err, ErrCandidateAlreadyKnown)
 				})
 
 				t.Run("mark_candidate_entry_as_backed", func(t *testing.T) {
@@ -1052,7 +1052,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 	candidateCHash, candidateCEntry := hashAndInsertCandididate(t, storage, candidateC, pvdC, Backed)
 
 	t.Run("candidate_A_doesnt_adhere_to_base_constraints", func(t *testing.T) {
-		wrongConstraints := []inclusionemulator.Constraints{
+		wrongConstraints := []parachaintypes.Constraints{
 			// define a constraint that requires a parent head data
 			// that is different from candidate A parent head
 			*makeConstraints(relayParentAInfo.Number, []uint{relayParentAInfo.Number}, parachaintypes.HeadData{Data: []byte{0x0e}}),
@@ -1358,7 +1358,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 			scope, err := NewScopeWithAncestors(
 				*relayParentCInfo,
 				baseConstraints,
-				[]*PendindAvailability{
+				[]*PendingAvailability{
 					{CandidateHash: modifiedCandidateAHash, RelayParent: *relayParentBInfo},
 				},
 				4,
@@ -1412,7 +1412,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		scope, err := NewScopeWithAncestors(
 			*relayParentCInfo,
 			baseConstraints,
-			[]*PendindAvailability{
+			[]*PendingAvailability{
 				{
 					CandidateHash: modifiedCandidateAHash,
 					RelayParent:   *relayParentBInfo,
@@ -1431,7 +1431,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 	})
 
 	t.Run("multiple_pending_availability_candidates", func(t *testing.T) {
-		validOptions := [][]*PendindAvailability{
+		validOptions := [][]*PendingAvailability{
 			{
 				{CandidateHash: candidateAHash, RelayParent: *relayParentAInfo},
 			},
@@ -1470,7 +1470,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		scope, err := NewScopeWithAncestors(
 			*relayParentCInfo,
 			baseConstraints,
-			[]*PendindAvailability{
+			[]*PendingAvailability{
 				{CandidateHash: candidateAHash, RelayParent: *relayParentAInfo},
 			},
 			4,
@@ -1487,7 +1487,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		scope, err := NewScopeWithAncestors(
 			*relayParentCInfo,
 			baseConstraints,
-			[]*PendindAvailability{
+			[]*PendingAvailability{
 				{
 					CandidateHash: candidateAHash,
 					RelayParent: inclusionemulator.RelayChainBlockInfo{
@@ -1655,8 +1655,8 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		assert.Equal(t, expectedUnconnected, unconnectedHashes)
 
 		// Cannot add as potential an already present candidate (whether it's in the best chain or in unconnected storage)
-		assert.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateAEntry), ErrCandidateAlradyKnown)
-		assert.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateFEntry), ErrCandidateAlradyKnown)
+		assert.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateAEntry), ErrCandidateAlreadyKnown)
+		assert.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateFEntry), ErrCandidateAlreadyKnown)
 
 		t.Run("simulate_best_chain_reorg", func(t *testing.T) {
 			// back a2, the reversion should happen at the root.
@@ -1787,7 +1787,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		t.Run("simulate_candidates_A_B_C_are_pending_availability", func(t *testing.T) {
 			scope, err := NewScopeWithAncestors(
 				*relayParentCInfo, baseConstraints.Clone(),
-				[]*PendindAvailability{
+				[]*PendingAvailability{
 					{CandidateHash: candidateAHash, RelayParent: *relayParentAInfo},
 					{CandidateHash: candidateBHash, RelayParent: *relayParentBInfo},
 					{CandidateHash: candidateCHash, RelayParent: *relayParentCInfo},
@@ -1813,7 +1813,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 			}, unconnectedHashes)
 
 			// cannot add as potential an already pending availability candidate
-			require.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateAEntry), ErrCandidateAlradyKnown)
+			require.ErrorIs(t, chain.CanAddCandidateAsPotential(candidateAEntry), ErrCandidateAlreadyKnown)
 
 			// simulate the fact that candidate A, B and C have been included
 			baseConstraints := makeConstraints(0, []uint{0}, parachaintypes.HeadData{Data: []byte{0x0d}})
@@ -1863,7 +1863,7 @@ func cloneFragmentChain(original *FragmentChain) *FragmentChain {
 	clonedScope := &Scope{
 		relayParent:         original.scope.relayParent,
 		baseConstraints:     original.scope.baseConstraints.Clone(),
-		pendindAvailability: append([]*PendindAvailability(nil), original.scope.pendindAvailability...),
+		pendingAvailability: append([]*PendingAvailability(nil), original.scope.pendingAvailability...),
 		maxDepth:            original.scope.maxDepth,
 		ancestors:           original.scope.ancestors.Copy(),
 		ancestorsByHash:     make(map[common.Hash]inclusionemulator.RelayChainBlockInfo),
@@ -2160,7 +2160,7 @@ func TestFindAncestorPathAndFindBackableChain(t *testing.T) {
 
 		// stop when we've found a candidate which is pending availability
 		scope, err := NewScopeWithAncestors(relayParentInfo, baseConstraints,
-			[]*PendindAvailability{
+			[]*PendingAvailability{
 				{CandidateHash: candidateHashes[3], RelayParent: relayParentInfo},
 			},
 			maxDepth,

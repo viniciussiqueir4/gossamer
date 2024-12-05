@@ -3,6 +3,8 @@
 
 package parachaintypes
 
+import "maps"
+
 // AsyncBackingParams contains the parameters for the async backing.
 type AsyncBackingParams struct {
 	// The maximum number of para blocks between the para head in a relay parent
@@ -70,8 +72,36 @@ type Constraints struct {
 	FutureValidationCode *FutureValidationCode
 }
 
-// FutureValidationCode represents a tuple of BlockNumber an ValidationCodeHash
+// FutureValidationCode represents a tuple of BlockNumber and ValidationCodeHash
 type FutureValidationCode struct {
 	BlockNumber        uint
 	ValidationCodeHash ValidationCodeHash
+}
+
+func (c *Constraints) Clone() *Constraints {
+	var futureValidationCode *FutureValidationCode
+	if c.FutureValidationCode != nil {
+		futureValidationCode = &FutureValidationCode{
+			BlockNumber:        c.FutureValidationCode.BlockNumber,
+			ValidationCodeHash: c.FutureValidationCode.ValidationCodeHash,
+		}
+	}
+	return &Constraints{
+		MinRelayParentNumber:  c.MinRelayParentNumber,
+		MaxPoVSize:            c.MaxPoVSize,
+		MaxCodeSize:           c.MaxCodeSize,
+		UmpRemaining:          c.UmpRemaining,
+		UmpRemainingBytes:     c.UmpRemainingBytes,
+		MaxUmpNumPerCandidate: c.MaxUmpNumPerCandidate,
+		DmpRemainingMessages:  append([]uint(nil), c.DmpRemainingMessages...),
+		HrmpInbound: InboundHrmpLimitations{
+			ValidWatermarks: append([]uint(nil), c.HrmpInbound.ValidWatermarks...),
+		},
+		HrmpChannelsOut:        maps.Clone(c.HrmpChannelsOut),
+		MaxHrmpNumPerCandidate: c.MaxHrmpNumPerCandidate,
+		RequiredParent:         c.RequiredParent,
+		ValidationCodeHash:     c.ValidationCodeHash,
+		UpgradeRestriction:     c.UpgradeRestriction,
+		FutureValidationCode:   futureValidationCode,
+	}
 }
