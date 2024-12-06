@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"maps"
-	"math/rand/v2"
+	"math/rand"
 	"slices"
 	"testing"
 
@@ -2101,7 +2101,8 @@ func TestFindAncestorPathAndFindBackableChain(t *testing.T) {
 		require.Equal(t, hashes(0, 5), chain.FindBackableChain(make(Ancestors), 5))
 
 		for count := 6; count < 10; count++ {
-			require.Equal(t, hashes(0, 6), chain.FindBackableChain(make(Ancestors), uint32(count)))
+			backableChain := chain.FindBackableChain(make(Ancestors), uint32(count))
+			require.Equal(t, hashes(0, 6), backableChain)
 		}
 
 		// ancestors which is not part of the chain will be ignored
