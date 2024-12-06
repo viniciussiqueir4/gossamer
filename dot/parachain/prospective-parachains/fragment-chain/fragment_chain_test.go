@@ -20,8 +20,8 @@ import (
 
 func TestCandidateStorage_RemoveCandidate(t *testing.T) {
 	storage := &CandidateStorage{
-		byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-		byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+		byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+		byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 		byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 	}
 
@@ -37,8 +37,8 @@ func TestCandidateStorage_RemoveCandidate(t *testing.T) {
 	}
 
 	storage.byCandidateHash[candidateHash] = entry
-	storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
-	storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
+	storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
+	storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
 
 	storage.removeCandidate(candidateHash)
 
@@ -54,8 +54,8 @@ func TestCandidateStorage_RemoveCandidate(t *testing.T) {
 
 func TestCandidateStorage_MarkBacked(t *testing.T) {
 	storage := &CandidateStorage{
-		byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-		byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+		byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+		byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 		byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 	}
 
@@ -71,8 +71,8 @@ func TestCandidateStorage_MarkBacked(t *testing.T) {
 	}
 
 	storage.byCandidateHash[candidateHash] = entry
-	storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
-	storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
+	storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
+	storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
 
 	storage.markBacked(candidateHash)
 
@@ -88,8 +88,8 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 		"find_head_data_of_first_candidate_using_output_head_data_hash": {
 			setup: func() *CandidateStorage {
 				storage := &CandidateStorage{
-					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 					byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 				}
 
@@ -102,7 +102,7 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 					candidateHash:      candidateHash,
 					parentHeadDataHash: parentHeadHash,
 					outputHeadDataHash: outputHeadHash,
-					candidate: inclusionemulator.ProspectiveCandidate{
+					candidate: &inclusionemulator.ProspectiveCandidate{
 						Commitments: parachaintypes.CandidateCommitments{
 							HeadData: headData,
 						},
@@ -110,8 +110,8 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 				}
 
 				storage.byCandidateHash[candidateHash] = entry
-				storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
-				storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
+				storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
+				storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
 
 				return storage
 			},
@@ -121,8 +121,8 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 		"find_head_data_using_parent_head_data_hash_from_second_candidate": {
 			setup: func() *CandidateStorage {
 				storage := &CandidateStorage{
-					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 					byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 				}
 
@@ -135,7 +135,7 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 					candidateHash:      candidateHash,
 					parentHeadDataHash: parentHeadHash,
 					outputHeadDataHash: outputHeadHash,
-					candidate: inclusionemulator.ProspectiveCandidate{
+					candidate: &inclusionemulator.ProspectiveCandidate{
 						PersistedValidationData: parachaintypes.PersistedValidationData{
 							ParentHead: headData,
 						},
@@ -143,8 +143,8 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 				}
 
 				storage.byCandidateHash[candidateHash] = entry
-				storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
-				storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]any{candidateHash: struct{}{}}
+				storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
+				storage.byOutputHead[outputHeadHash] = map[parachaintypes.CandidateHash]struct{}{candidateHash: struct{}{}}
 
 				return storage
 			},
@@ -154,8 +154,8 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 		"use_nonexistent_hash_and_should_get_nil": {
 			setup: func() *CandidateStorage {
 				storage := &CandidateStorage{
-					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 					byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 				}
 				return storage
@@ -166,8 +166,8 @@ func TestCandidateStorage_HeadDataByHash(t *testing.T) {
 		"insert_0_candidates_and_try_to_find_but_should_get_nil": {
 			setup: func() *CandidateStorage {
 				return &CandidateStorage{
-					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 					byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 				}
 			},
@@ -195,8 +195,8 @@ func TestCandidateStorage_PossibleBackedParaChildren(t *testing.T) {
 		"insert_2_candidates_for_same_parent_one_seconded_one_backed": {
 			setup: func() *CandidateStorage {
 				storage := &CandidateStorage{
-					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 					byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 				}
 
@@ -223,7 +223,7 @@ func TestCandidateStorage_PossibleBackedParaChildren(t *testing.T) {
 
 				storage.byCandidateHash[candidateHash1] = entry1
 				storage.byCandidateHash[candidateHash2] = entry2
-				storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]any{
+				storage.byParentHead[parentHeadHash] = map[parachaintypes.CandidateHash]struct{}{
 					candidateHash1: struct{}{},
 					candidateHash2: struct{}{},
 				}
@@ -236,8 +236,8 @@ func TestCandidateStorage_PossibleBackedParaChildren(t *testing.T) {
 		"insert_nothing_and_call_function_should_return_nothing": {
 			setup: func() *CandidateStorage {
 				return &CandidateStorage{
-					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+					byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+					byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 					byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 				}
 			},
@@ -772,7 +772,8 @@ func TestCandidateStorageMethods(t *testing.T) {
 				t.Run("add_candidate_entry_as_seconded", func(t *testing.T) {
 					err = storage.addCandidateEntry(entry)
 					require.NoError(t, err)
-					require.True(t, storage.contains(candidateHash))
+					_, ok := storage.byCandidateHash[candidateHash]
+					require.True(t, ok)
 
 					// should not have any possible backed candidate yet
 					for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
@@ -817,7 +818,8 @@ func TestCandidateStorageMethods(t *testing.T) {
 					// remove it twice should be fine
 					storage.removeCandidate(candidateHash)
 
-					require.False(t, storage.contains(candidateHash))
+					_, ok := storage.byCandidateHash[candidateHash]
+					require.False(t, ok)
 
 					// should not have any possible backed candidate anymore
 					for entry := range storage.possibleBackedParaChildren(parentHeadHash) {
@@ -854,7 +856,9 @@ func TestCandidateStorageMethods(t *testing.T) {
 				storage := NewCandidateStorage()
 				err = storage.AddPendingAvailabilityCandidate(candidateHash, candidate, pvd)
 				require.NoError(t, err)
-				require.True(t, storage.contains(candidateHash))
+
+				_, ok := storage.byCandidateHash[candidateHash]
+				require.True(t, ok)
 
 				// here we should have 1 possible backed candidate when we
 				// use the parentHeadHash (parent of our current candidate) to query

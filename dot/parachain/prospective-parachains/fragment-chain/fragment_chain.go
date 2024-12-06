@@ -16,7 +16,7 @@ import (
 
 var logger = log.NewFromGlobal(log.AddContext("pkg", "fragment_chain"), log.SetLevel(log.Debug))
 
-type CandidateState int
+type CandidateState byte
 
 const (
 	Seconded CandidateState = iota
@@ -33,10 +33,8 @@ type CandidateEntry struct {
 	parentHeadDataHash common.Hash
 	outputHeadDataHash common.Hash
 	relayParent        common.Hash
-	// TODO: this is under a Arc<ProspectiveCandidate> smart pointer, should we
-	// have that here? maybe some specialized struct that protects the underlying data?
-	candidate inclusionemulator.ProspectiveCandidate
-	state     CandidateState
+	candidate          *inclusionemulator.ProspectiveCandidate
+	state              CandidateState
 }
 
 func (c *CandidateEntry) Hash() parachaintypes.CandidateHash {
@@ -51,7 +49,7 @@ func NewCandidateEntry(
 ) (*CandidateEntry, error) {
 	pvdHash, err := persistedValidationData.Hash()
 	if err != nil {
-		return nil, fmt.Errorf("while hashing persisted validation data: %w", err)
+		return nil, fmt.Errorf("hashing persisted validation data: %w", err)
 	}
 
 	if pvdHash != candidate.Descriptor.PersistedValidationDataHash {
@@ -60,12 +58,12 @@ func NewCandidateEntry(
 
 	parentHeadDataHash, err := persistedValidationData.ParentHead.Hash()
 	if err != nil {
-		return nil, fmt.Errorf("while hashing parent head data: %w", err)
+		return nil, fmt.Errorf("hashing parent head data: %w", err)
 	}
 
 	outputHeadDataHash, err := candidate.Commitments.HeadData.Hash()
 	if err != nil {
-		return nil, fmt.Errorf("while hashing output head data: %w", err)
+		return nil, fmt.Errorf("hashing output head data: %w", err)
 	}
 
 	if parentHeadDataHash == outputHeadDataHash {
@@ -78,7 +76,7 @@ func NewCandidateEntry(
 		outputHeadDataHash: outputHeadDataHash,
 		relayParent:        candidate.Descriptor.RelayParent,
 		state:              state,
-		candidate: inclusionemulator.ProspectiveCandidate{
+		candidate: &inclusionemulator.ProspectiveCandidate{
 			Commitments:             candidate.Commitments,
 			PersistedValidationData: persistedValidationData,
 			PoVHash:                 candidate.Descriptor.PovHash,
@@ -91,8 +89,8 @@ func NewCandidateEntry(
 // their relay-parents and their backing states. This does not assume any restriction on whether
 // or not candidates form a chain. Useful for storing all kinds of candidates.
 type CandidateStorage struct {
-	byParentHead    map[common.Hash]map[parachaintypes.CandidateHash]any
-	byOutputHead    map[common.Hash]map[parachaintypes.CandidateHash]any
+	byParentHead    map[common.Hash]map[parachaintypes.CandidateHash]struct{}
+	byOutputHead    map[common.Hash]map[parachaintypes.CandidateHash]struct{}
 	byCandidateHash map[parachaintypes.CandidateHash]*CandidateEntry
 }
 
@@ -100,14 +98,14 @@ func (c *CandidateStorage) Clone() *CandidateStorage {
 	clone := NewCandidateStorage()
 
 	for parentHead, candidates := range c.byParentHead {
-		clone.byParentHead[parentHead] = make(map[parachaintypes.CandidateHash]any)
+		clone.byParentHead[parentHead] = make(map[parachaintypes.CandidateHash]struct{})
 		for candidateHash := range candidates {
 			clone.byParentHead[parentHead][candidateHash] = struct{}{}
 		}
 	}
 
 	for outputHead, candidates := range c.byOutputHead {
-		clone.byOutputHead[outputHead] = make(map[parachaintypes.CandidateHash]any)
+		clone.byOutputHead[outputHead] = make(map[parachaintypes.CandidateHash]struct{})
 		for candidateHash := range candidates {
 			clone.byOutputHead[outputHead][candidateHash] = struct{}{}
 		}
@@ -119,13 +117,8 @@ func (c *CandidateStorage) Clone() *CandidateStorage {
 			parentHeadDataHash: entry.parentHeadDataHash,
 			outputHeadDataHash: entry.outputHeadDataHash,
 			relayParent:        entry.relayParent,
-			candidate: inclusionemulator.ProspectiveCandidate{
-				Commitments:             entry.candidate.Commitments,
-				PersistedValidationData: entry.candidate.PersistedValidationData,
-				PoVHash:                 entry.candidate.PoVHash,
-				ValidationCodeHash:      entry.candidate.ValidationCodeHash,
-			},
-			state: entry.state,
+			candidate:          entry.candidate,
+			state:              entry.state,
 		}
 	}
 
@@ -134,8 +127,8 @@ func (c *CandidateStorage) Clone() *CandidateStorage {
 
 func NewCandidateStorage() *CandidateStorage {
 	return &CandidateStorage{
-		byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
-		byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]any),
+		byParentHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
+		byOutputHead:    make(map[common.Hash]map[parachaintypes.CandidateHash]struct{}),
 		byCandidateHash: make(map[parachaintypes.CandidateHash]*CandidateEntry),
 	}
 }
@@ -150,7 +143,11 @@ func (c *CandidateStorage) AddPendingAvailabilityCandidate(
 		return err
 	}
 
-	return c.addCandidateEntry(entry)
+	if err := c.addCandidateEntry(entry); err != nil {
+		return fmt.Errorf("adding pending availability candidate: %w", err)
+	}
+
+	return nil
 }
 
 // Len return the number of stored candidate
@@ -169,7 +166,7 @@ func (c *CandidateStorage) addCandidateEntry(candidate *CandidateEntry) error {
 	// exists in the map but pointing to a nil map
 	setOfCandidates := c.byParentHead[candidate.parentHeadDataHash]
 	if setOfCandidates == nil {
-		setOfCandidates = make(map[parachaintypes.CandidateHash]any)
+		setOfCandidates = make(map[parachaintypes.CandidateHash]struct{})
 	}
 	setOfCandidates[candidate.candidateHash] = struct{}{}
 	c.byParentHead[candidate.parentHeadDataHash] = setOfCandidates
@@ -177,7 +174,7 @@ func (c *CandidateStorage) addCandidateEntry(candidate *CandidateEntry) error {
 	// udpates the reference output hash -> candidate
 	setOfCandidates = c.byOutputHead[candidate.outputHeadDataHash]
 	if setOfCandidates == nil {
-		setOfCandidates = make(map[parachaintypes.CandidateHash]any)
+		setOfCandidates = make(map[parachaintypes.CandidateHash]struct{})
 	}
 	setOfCandidates[candidate.candidateHash] = struct{}{}
 	c.byOutputHead[candidate.outputHeadDataHash] = setOfCandidates
@@ -216,11 +213,6 @@ func (c *CandidateStorage) markBacked(candidateHash parachaintypes.CandidateHash
 	}
 
 	entry.state = Backed
-}
-
-func (c *CandidateStorage) contains(candidateHash parachaintypes.CandidateHash) bool {
-	_, ok := c.byCandidateHash[candidateHash]
-	return ok
 }
 
 // candidates returns an iterator over references to the stored candidates, in arbitrary order.
@@ -564,8 +556,9 @@ func (f *FragmentChain) UnconnectedLen() int {
 	return f.unconnected.Len()
 }
 
-func (f *FragmentChain) ContainsUnconnectedCandidate(candidate parachaintypes.CandidateHash) bool {
-	return f.unconnected.contains(candidate)
+func (f *FragmentChain) ContainsUnconnectedCandidate(candidateHash parachaintypes.CandidateHash) bool {
+	_, ok := f.unconnected.byCandidateHash[candidateHash]
+	return ok
 }
 
 // BestChainVec returns a vector of the chain's candidate hashes, in-order.
@@ -624,7 +617,9 @@ func (f *FragmentChain) CandidateBacked(newlyBackedCandidate parachaintypes.Cand
 // CanAddCandidateAsPotential checks if this candidate could be added in the future
 func (f *FragmentChain) CanAddCandidateAsPotential(entry *CandidateEntry) error {
 	candidateHash := entry.candidateHash
-	if f.bestChain.Contains(candidateHash) || f.unconnected.contains(candidateHash) {
+
+	_, existsInCandidateStorage := f.unconnected.byCandidateHash[candidateHash]
+	if f.bestChain.Contains(candidateHash) || existsInCandidateStorage {
 		return ErrCandidateAlreadyKnown
 	}
 

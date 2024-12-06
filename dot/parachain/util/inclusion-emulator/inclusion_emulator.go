@@ -34,31 +34,31 @@ func (e *ErrDisallowedHrmpWatermark) Error() string {
 }
 
 type ErrNoSuchHrmpChannel struct {
-	paraId parachaintypes.ParaID
+	paraID parachaintypes.ParaID
 }
 
 func (e *ErrNoSuchHrmpChannel) Error() string {
-	return fmt.Sprintf("NoSuchHrmpChannel(ParaId: %d)", e.paraId)
+	return fmt.Sprintf("NoSuchHrmpChannel(ParaId: %d)", e.paraID)
 }
 
 type ErrHrmpMessagesOverflow struct {
-	paraId            parachaintypes.ParaID
+	paraID            parachaintypes.ParaID
 	messagesRemaining uint32
 	messagesSubmitted uint32
 }
 
 func (e *ErrHrmpMessagesOverflow) Error() string {
-	return fmt.Sprintf("HrmpMessagesOverflow(ParaId: %d, MessagesRemaining: %d, MessagesSubmitted: %d)", e.paraId, e.messagesRemaining, e.messagesSubmitted)
+	return fmt.Sprintf("HrmpMessagesOverflow(ParaId: %d, MessagesRemaining: %d, MessagesSubmitted: %d)", e.paraID, e.messagesRemaining, e.messagesSubmitted)
 }
 
 type ErrHrmpBytesOverflow struct {
-	paraId         parachaintypes.ParaID
+	paraID         parachaintypes.ParaID
 	bytesRemaining uint32
 	bytesSubmitted uint32
 }
 
 func (e *ErrHrmpBytesOverflow) Error() string {
-	return fmt.Sprintf("HrmpBytesOverflow(ParaId: %d, BytesRemaining: %d, BytesSubmitted: %d)", e.paraId, e.bytesRemaining, e.bytesSubmitted)
+	return fmt.Sprintf("HrmpBytesOverflow(ParaId: %d, BytesRemaining: %d, BytesSubmitted: %d)", e.paraID, e.bytesRemaining, e.bytesSubmitted)
 }
 
 type ErrUmpMessagesOverflow struct {
@@ -181,13 +181,13 @@ func CheckModifications(c *parachaintypes.Constraints, modifications *Constraint
 	for id, outboundHrmpMod := range modifications.OutboundHrmp {
 		outbound, ok := c.HrmpChannelsOut[id]
 		if !ok {
-			return &ErrNoSuchHrmpChannel{paraId: id}
+			return &ErrNoSuchHrmpChannel{paraID: id}
 		}
 
 		_, overflow := math.SafeSub(uint64(outbound.BytesRemaining), uint64(outboundHrmpMod.BytesSubmitted))
 		if overflow {
 			return &ErrHrmpBytesOverflow{
-				paraId:         id,
+				paraID:         id,
 				bytesRemaining: outbound.BytesRemaining,
 				bytesSubmitted: outboundHrmpMod.BytesSubmitted,
 			}
@@ -196,7 +196,7 @@ func CheckModifications(c *parachaintypes.Constraints, modifications *Constraint
 		_, overflow = math.SafeSub(uint64(outbound.MessagesRemaining), uint64(outboundHrmpMod.MessagesSubmitted))
 		if overflow {
 			return &ErrHrmpMessagesOverflow{
-				paraId:            id,
+				paraID:            id,
 				messagesRemaining: outbound.MessagesRemaining,
 				messagesSubmitted: outboundHrmpMod.MessagesSubmitted,
 			}
@@ -270,7 +270,7 @@ func ApplyModifications(c *parachaintypes.Constraints, modifications *Constraint
 
 		if outboundHrmpMod.BytesSubmitted > outbound.BytesRemaining {
 			return nil, &ErrHrmpBytesOverflow{
-				paraId:         id,
+				paraID:         id,
 				bytesRemaining: outbound.BytesRemaining,
 				bytesSubmitted: outboundHrmpMod.BytesSubmitted,
 			}
@@ -278,7 +278,7 @@ func ApplyModifications(c *parachaintypes.Constraints, modifications *Constraint
 
 		if outboundHrmpMod.MessagesSubmitted > outbound.MessagesRemaining {
 			return nil, &ErrHrmpMessagesOverflow{
-				paraId:            id,
+				paraID:            id,
 				messagesRemaining: outbound.MessagesRemaining,
 				messagesSubmitted: outboundHrmpMod.MessagesSubmitted,
 			}
@@ -383,13 +383,7 @@ func (cm *ConstraintModifications) Clone() *ConstraintModifications {
 // any constraints and yield the exact same result.
 func NewConstraintModificationsIdentity() *ConstraintModifications {
 	return &ConstraintModifications{
-		RequiredParent:       nil,
-		HrmpWatermark:        nil,
-		OutboundHrmp:         make(map[parachaintypes.ParaID]OutboundHrmpChannelModification),
-		UmpMessagesSent:      0,
-		UmpBytesSent:         0,
-		DmpMessagesProcessed: 0,
-		CodeUpgradeApplied:   false,
+		OutboundHrmp: make(map[parachaintypes.ParaID]OutboundHrmpChannelModification),
 	}
 }
 
@@ -427,7 +421,7 @@ func (cm *ConstraintModifications) Stack(other *ConstraintModifications) {
 type Fragment struct {
 	relayParent          *RelayChainBlockInfo
 	operatingConstraints *parachaintypes.Constraints
-	candidate            ProspectiveCandidate
+	candidate            *ProspectiveCandidate
 	modifications        *ConstraintModifications
 }
 
@@ -435,7 +429,7 @@ func (f *Fragment) RelayParent() *RelayChainBlockInfo {
 	return f.relayParent
 }
 
-func (f *Fragment) Candidate() ProspectiveCandidate {
+func (f *Fragment) Candidate() *ProspectiveCandidate {
 	return f.candidate
 }
 
@@ -451,7 +445,8 @@ func (f *Fragment) ConstraintModifications() *ConstraintModifications {
 func NewFragment(
 	relayParent *RelayChainBlockInfo,
 	operatingConstraints *parachaintypes.Constraints,
-	candidate ProspectiveCandidate) (*Fragment, error) {
+	candidate *ProspectiveCandidate) (*Fragment, error) {
+
 	modifications, err := CheckAgainstConstraints(
 		relayParent,
 		operatingConstraints,
@@ -603,7 +598,12 @@ func validateAgainstConstraints(
 	}
 
 	if commitments.NewValidationCode != nil {
-		switch constraints.UpgradeRestriction.(type) {
+		restriction, err := constraints.UpgradeRestriction.Value()
+		if err != nil {
+			return fmt.Errorf("while getting upgrade restriction: %w", err)
+		}
+
+		switch restriction.(type) {
 		case *parachaintypes.Present:
 			return ErrCodeUpgradeRestricted
 		}
