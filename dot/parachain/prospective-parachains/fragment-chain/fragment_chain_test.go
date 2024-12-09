@@ -671,7 +671,7 @@ func TestScopeOnlyTakesAncestorsUpToMin(t *testing.T) {
 	}
 
 	maxDepth := uint(2)
-	baseConstraints := makeConstraints(0, []uint{2}, parachaintypes.HeadData{Data: []byte{1, 2, 3}})
+	baseConstraints := makeConstraints(3, []uint{2}, parachaintypes.HeadData{Data: []byte{1, 2, 3}})
 	pendingAvailability := make([]*PendingAvailability, 0)
 
 	scope, err := NewScopeWithAncestors(relayParent, baseConstraints, pendingAvailability, maxDepth, ancestors)
