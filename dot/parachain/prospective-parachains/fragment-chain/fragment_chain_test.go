@@ -230,8 +230,12 @@ func TestCandidateStorage_PossibleBackedParaChildren(t *testing.T) {
 
 				return storage
 			},
-			hash:     common.Hash{4, 5, 6},
-			expected: []*CandidateEntry{{candidateHash: parachaintypes.CandidateHash{Value: common.Hash{10, 11, 12}}, parentHeadDataHash: common.Hash{4, 5, 6}, outputHeadDataHash: common.Hash{13, 14, 15}, state: Backed}},
+			hash: common.Hash{4, 5, 6},
+			expected: []*CandidateEntry{{candidateHash: parachaintypes.CandidateHash{
+				Value: common.Hash{10, 11, 12}},
+				parentHeadDataHash: common.Hash{4, 5, 6},
+				outputHeadDataHash: common.Hash{13, 14, 15}, state: Backed},
+			},
 		},
 		"insert_nothing_and_call_function_should_return_nothing": {
 			setup: func() *CandidateStorage {
@@ -638,7 +642,12 @@ func TestScopeRejectsAncestors(t *testing.T) {
 	for name, tt := range tests {
 		tt := tt
 		t.Run(name, func(t *testing.T) {
-			scope, err := NewScopeWithAncestors(*tt.relayParent, tt.baseConstraints, tt.pendingAvailability, tt.maxDepth, tt.ancestors)
+			scope, err := NewScopeWithAncestors(
+				*tt.relayParent,
+				tt.baseConstraints,
+				tt.pendingAvailability,
+				tt.maxDepth,
+				tt.ancestors)
 			require.ErrorIs(t, err, tt.expectedError)
 			require.Nil(t, scope)
 		})
@@ -1002,7 +1011,10 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 	// helper function to hash the candidate and add its entry
 	// into the candidate storage
 	hashAndInsertCandididate := func(t *testing.T, storage *CandidateStorage,
-		candidate parachaintypes.CommittedCandidateReceipt, pvd parachaintypes.PersistedValidationData, state CandidateState) (parachaintypes.CandidateHash, *CandidateEntry) {
+		candidate parachaintypes.CommittedCandidateReceipt,
+		pvd parachaintypes.PersistedValidationData, state CandidateState) (
+		parachaintypes.CandidateHash, *CandidateEntry) {
+
 		hash, err := candidate.Hash()
 		require.NoError(t, err)
 		candidateHash := parachaintypes.CandidateHash{Value: hash}
@@ -1059,7 +1071,8 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		wrongConstraints := []parachaintypes.Constraints{
 			// define a constraint that requires a parent head data
 			// that is different from candidate A parent head
-			*makeConstraints(relayParentAInfo.Number, []uint{relayParentAInfo.Number}, parachaintypes.HeadData{Data: []byte{0x0e}}),
+			*makeConstraints(relayParentAInfo.Number,
+				[]uint{relayParentAInfo.Number}, parachaintypes.HeadData{Data: []byte{0x0e}}),
 
 			// the min relay parent for candidate A is wrong
 			*makeConstraints(relayParentBInfo.Number, []uint{0}, firstParachainHead),
@@ -1081,7 +1094,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 			// if the min relay parent is wrong, candidate A can never become valid, otherwise
 			// if only the required parent doesnt match, candidate A still a potential candidate
 			if wrongConstraint.MinRelayParentNumber == relayParentBInfo.Number {
-				// if A is not a potential candidate, its decendants will also not be added.
+				// if A is not a potential candidate, its descendants will also not be added.
 				require.Equal(t, chain.UnconnectedLen(), 0)
 				err := chain.CanAddCandidateAsPotential(candidateAEntry)
 				require.ErrorIs(t, err, ErrRelayParentNotInScope{
@@ -1803,7 +1816,9 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 
 			// candidates A2, B2 will now be trimmed
 			chain := populateFromPreviousStorage(scope, storage)
-			require.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash}, chain.BestChainVec())
+			require.Equal(t,
+				[]parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash},
+				chain.BestChainVec())
 
 			unconnectedHashes := make(map[parachaintypes.CandidateHash]struct{})
 			for unconnected := range chain.Unconnected() {

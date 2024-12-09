@@ -529,7 +529,7 @@ func (f *FragmentChain) PopulateFromPrevious(prevFragmentChain *FragmentChain) {
 		// availability candidates will always be part of the best chain
 		pending := prevFragmentChain.scope.GetPendingAvailability(candidate.candidateHash)
 		if pending == nil {
-			prevStorage.addCandidateEntry(NewCandidateEntryFromFragment(candidate))
+			_ = prevStorage.addCandidateEntry(NewCandidateEntryFromFragment(candidate))
 		}
 	}
 
@@ -1034,7 +1034,7 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 			// 2. parent hash is correct
 			// 3. relay parent does not move backwards
 			// 4. all non-pending-availability candidates have relay-parent in the scope
-			// 5. candidate outputs fulfill constraints
+			// 5. candidate outputs fulfil constraints
 
 			var relayParent *inclusionemulator.RelayChainBlockInfo
 			var minRelayParent uint
