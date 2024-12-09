@@ -1012,7 +1012,7 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 		return
 	}
 
-	for len(f.bestChain.chain) < int(f.scope.maxDepth) {
+	for len(f.bestChain.chain) < int(f.scope.maxDepth)+1 {
 		childConstraints, err := inclusionemulator.ApplyModifications(
 			f.scope.baseConstraints, cumulativeModifications)
 		if err != nil {
