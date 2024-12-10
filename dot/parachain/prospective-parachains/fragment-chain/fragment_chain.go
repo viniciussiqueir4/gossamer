@@ -570,11 +570,6 @@ func (f *FragmentChain) BestChainVec() (hashes []parachaintypes.CandidateHash) {
 	return hashes
 }
 
-// Unconnected returns a vector of the unconnected potential candidate hashes, in arbitrary order.
-func (f *FragmentChain) Unconnected() iter.Seq[*CandidateEntry] {
-	return f.unconnected.candidates()
-}
-
 func (f *FragmentChain) IsCandidateBacked(hash parachaintypes.CandidateHash) bool {
 	if f.bestChain.Contains(hash) {
 		return true

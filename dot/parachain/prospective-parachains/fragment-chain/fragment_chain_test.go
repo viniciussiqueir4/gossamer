@@ -1109,7 +1109,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				potentials := make([]parachaintypes.CandidateHash, 0)
-				for unconnected := range chain.Unconnected() {
+				for _, unconnected := range chain.unconnected.byCandidateHash {
 					potentials = append(potentials, unconnected.candidateHash)
 				}
 
@@ -1179,7 +1179,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 
 					// Check that the unconnected candidates are as expected
 					unconnectedHashes := make(map[parachaintypes.CandidateHash]struct{})
-					for unconnected := range chain.Unconnected() {
+					for _, unconnected := range chain.unconnected.byCandidateHash {
 						unconnectedHashes[unconnected.candidateHash] = struct{}{}
 					}
 
@@ -1348,7 +1348,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		require.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash}, chain.BestChainVec())
 
 		unconnected := make(map[parachaintypes.CandidateHash]struct{})
-		for entry := range chain.Unconnected() {
+		for _, entry := range chain.unconnected.byCandidateHash {
 			unconnected[entry.candidateHash] = struct{}{}
 		}
 
@@ -1659,7 +1659,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		assert.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash}, chain.BestChainVec())
 
 		unconnectedHashes := make(map[parachaintypes.CandidateHash]struct{})
-		for unconnected := range chain.Unconnected() {
+		for _, unconnected := range chain.unconnected.byCandidateHash {
 			unconnectedHashes[unconnected.candidateHash] = struct{}{}
 		}
 
@@ -1684,7 +1684,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 
 			// candidate F is kept as it was truly unconnected. The rest will be trimmed
 			unconnected := map[parachaintypes.CandidateHash]struct{}{}
-			for entry := range chain.Unconnected() {
+			for _, entry := range chain.unconnected.byCandidateHash {
 				unconnected[entry.candidateHash] = struct{}{}
 			}
 
@@ -1766,7 +1766,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 			}, chain.BestChainVec())
 
 			unconnected := make(map[parachaintypes.CandidateHash]struct{})
-			for entry := range chain.Unconnected() {
+			for _, entry := range chain.unconnected.byCandidateHash {
 				unconnected[entry.candidateHash] = struct{}{}
 			}
 
@@ -1790,7 +1790,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 		require.Equal(t, []parachaintypes.CandidateHash{candidateAHash, candidateBHash, candidateCHash}, chain.BestChainVec())
 
 		unconnected := make(map[parachaintypes.CandidateHash]struct{})
-		for entry := range chain.Unconnected() {
+		for _, entry := range chain.unconnected.byCandidateHash {
 			unconnected[entry.candidateHash] = struct{}{}
 		}
 		require.Equal(t, map[parachaintypes.CandidateHash]struct{}{
@@ -1821,7 +1821,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 				chain.BestChainVec())
 
 			unconnectedHashes := make(map[parachaintypes.CandidateHash]struct{})
-			for unconnected := range chain.Unconnected() {
+			for _, unconnected := range chain.unconnected.byCandidateHash {
 				unconnectedHashes[unconnected.candidateHash] = struct{}{}
 			}
 
@@ -1845,7 +1845,7 @@ func TestPopulateAndCheckPotential(t *testing.T) {
 			require.Equal(t, []parachaintypes.CandidateHash{candidateDHash}, chain.BestChainVec())
 
 			unconnectedHashes = make(map[parachaintypes.CandidateHash]struct{})
-			for unconnected := range chain.Unconnected() {
+			for _, unconnected := range chain.unconnected.byCandidateHash {
 				unconnectedHashes[unconnected.candidateHash] = struct{}{}
 			}
 
