@@ -23,6 +23,8 @@ const (
 	Backed
 )
 
+// forkSelectionRule compares 2 candidate hashes, the result will be
+// 0 if hash1 == hash2, -1 if hash1 < hash2, and +1 if hash1 > hash2
 func forkSelectionRule(hash1, hash2 parachaintypes.CandidateHash) int {
 	return bytes.Compare(hash1.Value[:], hash2.Value[:])
 }
@@ -144,7 +146,7 @@ func (c *CandidateStorage) AddPendingAvailabilityCandidate(
 	}
 
 	if err := c.addCandidateEntry(entry); err != nil {
-		return fmt.Errorf("adding pending availability candidate: %w", err)
+		return fmt.Errorf("adding candidate entry: %w", err)
 	}
 
 	return nil
@@ -155,6 +157,10 @@ func (c *CandidateStorage) Len() int {
 	return len(c.byCandidateHash)
 }
 
+// addCandidateEntry inserts a new entry in the storage map, where the candidate hash
+// is the key and the *CandidateEntry is the value, also it create other links, the
+// parent head hash points to the candidate hash also the output head hash points to the
+// candidate hash
 func (c *CandidateStorage) addCandidateEntry(candidate *CandidateEntry) error {
 	_, ok := c.byCandidateHash[candidate.candidateHash]
 	if ok {
@@ -183,6 +189,9 @@ func (c *CandidateStorage) addCandidateEntry(candidate *CandidateEntry) error {
 	return nil
 }
 
+// removeCandidate removes the candidate entry from the storage based on candidateHash
+// it also removes the parent head hash entry that points to candidateHash and
+// removes the output head hash entry that points to candidateHash
 func (c *CandidateStorage) removeCandidate(candidateHash parachaintypes.CandidateHash) {
 	entry, ok := c.byCandidateHash[candidateHash]
 	if !ok {
@@ -213,17 +222,6 @@ func (c *CandidateStorage) markBacked(candidateHash parachaintypes.CandidateHash
 	}
 
 	entry.state = Backed
-}
-
-// candidates returns an iterator over references to the stored candidates, in arbitrary order.
-func (c *CandidateStorage) candidates() iter.Seq[*CandidateEntry] {
-	return func(yield func(*CandidateEntry) bool) {
-		for _, entry := range c.byCandidateHash {
-			if !yield(entry) {
-				return
-			}
-		}
-	}
 }
 
 func (c *CandidateStorage) headDataByHash(hash common.Hash) *parachaintypes.HeadData {
