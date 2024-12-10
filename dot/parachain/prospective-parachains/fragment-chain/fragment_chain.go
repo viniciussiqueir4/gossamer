@@ -1009,8 +1009,7 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 		childConstraints, err := inclusionemulator.ApplyModifications(
 			f.scope.baseConstraints, cumulativeModifications)
 		if err != nil {
-			// TODO: include logger
-			fmt.Println("failed to apply modifications:", err)
+			logger.Warnf("failed to apply modifications: %s", err.Error())
 			break
 		}
 
@@ -1051,7 +1050,7 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 			}
 
 			if err := f.checkCyclesOrInvalidTree(candidateEntry.outputHeadDataHash); err != nil {
-				fmt.Println("checking cycle or invalid tree:", err)
+				logger.Warnf("failed while checking cycle or invalid tree: %s", err.Error())
 				continue
 			}
 
@@ -1080,7 +1079,7 @@ func (f *FragmentChain) populateChain(storage *CandidateStorage) {
 
 			fragment, err := inclusionemulator.NewFragment(relayParent, constraints, candidateEntry.candidate)
 			if err != nil {
-				fmt.Println("failed to create fragment:", err)
+				logger.Warnf("failed to create fragment: %s", err.Error())
 				continue
 			}
 
