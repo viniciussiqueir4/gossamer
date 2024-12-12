@@ -1,4 +1,4 @@
-package inclusionemulator
+package prospectiveparachains
 
 import (
 	"bytes"
@@ -104,15 +104,6 @@ type ErrValidationCodeMismatch struct {
 
 func (e *ErrValidationCodeMismatch) Error() string {
 	return fmt.Sprintf("ValidationCodeMismatch(Expected: %v, Got: %v)", e.expected, e.got)
-}
-
-type ErrPersistedValidationDataMismatch struct {
-	expected parachaintypes.PersistedValidationData
-	got      parachaintypes.PersistedValidationData
-}
-
-func (e *ErrPersistedValidationDataMismatch) Error() string {
-	return fmt.Sprintf("PersistedValidationDataMismatch(Expected: %v, Got: %v)", e.expected, e.got)
 }
 
 type ErrOutputsInvalid struct {
@@ -583,10 +574,8 @@ func validateAgainstConstraints(
 	}
 
 	if !expectedPVD.Equal(persistedValidationData) {
-		return &ErrPersistedValidationDataMismatch{
-			expected: expectedPVD,
-			got:      persistedValidationData,
-		}
+		return fmt.Errorf("%w, expected: %v, got: %v",
+			ErrPersistedValidationDataMismatch, expectedPVD, persistedValidationData)
 	}
 
 	if constraints.ValidationCodeHash != validationCodeHash {

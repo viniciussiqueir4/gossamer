@@ -1,4 +1,4 @@
-package fragmentchain
+package prospectiveparachains
 
 import (
 	"errors"
