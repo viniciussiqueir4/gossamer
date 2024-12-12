@@ -19,9 +19,9 @@ const (
 	backed
 )
 
-// forkSelectionRule does a normal comparision between 2 candidate hashes
+// forkSelectionRule does a normal comparison between 2 candidate hashes
 // and returns -1 if the first hash is lower than the second one meaning that
-// the first hash will be choosen as the best candidate.
+// the first hash will be chosen as the best candidate.
 func forkSelectionRule(hash1, hash2 parachaintypes.CandidateHash) int {
 	return bytes.Compare(hash1.Value[:], hash2.Value[:])
 }
