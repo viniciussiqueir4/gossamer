@@ -454,7 +454,11 @@ func validateAgainstConstraints(
 	}
 
 	if commitments.NewValidationCode != nil {
-		switch constraints.UpgradeRestriction.(type) {
+		restriction, err := constraints.UpgradeRestriction.Value()
+		if err != nil {
+			return fmt.Errorf("while retrieving value: %w", err)
+		}
+		switch restriction.(type) {
 		case *parachaintypes.Present:
 			return errCodeUpgradeRestricted
 		}
