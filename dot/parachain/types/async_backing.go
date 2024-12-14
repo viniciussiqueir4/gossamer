@@ -69,7 +69,7 @@ type Constraints struct {
 	// The expected validation-code-hash of this parachain.
 	ValidationCodeHash ValidationCodeHash
 	// The code upgrade restriction signal as-of this parachain.
-	UpgradeRestriction *UpgradeRestriction
+	UpgradeRestriction UpgradeRestriction
 	// The future validation code hash, if any, and at what relay-parent
 	// number the upgrade would be minimally applied.
 	FutureValidationCode *FutureValidationCode
