@@ -534,7 +534,7 @@ func (f *fragmentChain) bestChainLen() int {
 	return len(f.bestChain.chain)
 }
 
-func (f *fragmentChain) containsUnconnectedCandidate(candidateHash parachaintypes.CandidateHash) bool {
+func (f *fragmentChain) containsUnconnectedCandidate(candidateHash parachaintypes.CandidateHash) bool { //nolint:unused
 	_, ok := f.unconnected.byCandidateHash[candidateHash]
 	return ok
 }
@@ -548,7 +548,7 @@ func (f *fragmentChain) bestChainVec() (hashes []parachaintypes.CandidateHash) {
 	return hashes
 }
 
-func (f *fragmentChain) isCandidateBacked(hash parachaintypes.CandidateHash) bool {
+func (f *fragmentChain) isCandidateBacked(hash parachaintypes.CandidateHash) bool { //nolint:unused
 	if _, ok := f.bestChain.candidates[hash]; ok {
 		return true
 	}
@@ -603,7 +603,7 @@ func (f *fragmentChain) canAddCandidateAsPotential(entry *candidateEntry) error 
 // tryAddingSecondedCandidate tries to add a candidate as a seconded candidate, if the
 // candidate has potential. It will never be added to the chain directly in the seconded
 // state, it will only be part of the unconnected storage
-func (f *fragmentChain) tryAddingSecondedCandidate(entry *candidateEntry) error {
+func (f *fragmentChain) tryAddingSecondedCandidate(entry *candidateEntry) error { //nolint:unused
 	if entry.state == backed {
 		return errIntroduceBackedCandidate
 	}
@@ -617,7 +617,7 @@ func (f *fragmentChain) tryAddingSecondedCandidate(entry *candidateEntry) error 
 }
 
 // getHeadDataByHash tries to get the full head data associated with this hash
-func (f *fragmentChain) getHeadDataByHash(headDataHash common.Hash) (*parachaintypes.HeadData, error) {
+func (f *fragmentChain) getHeadDataByHash(headDataHash common.Hash) (*parachaintypes.HeadData, error) { //nolint:unused
 	reqParent := f.scope.baseConstraints.RequiredParent
 	reqParentHash, err := reqParent.Hash()
 	if err != nil {
