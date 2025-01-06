@@ -74,9 +74,9 @@ func (e errRelayParentNotInScope) Error() string {
 
 type errUnexpectedAncestor struct {
 	// The block number that this error occurred at
-	number uint
+	number parachaintypes.BlockNumber
 	// The previous seen block number, which did not match `number`.
-	prev uint
+	prev parachaintypes.BlockNumber
 }
 
 func (e errUnexpectedAncestor) Error() string {
@@ -84,7 +84,7 @@ func (e errUnexpectedAncestor) Error() string {
 }
 
 type errDisallowedHrmpWatermark struct {
-	BlockNumber uint
+	BlockNumber parachaintypes.BlockNumber
 }
 
 func (e *errDisallowedHrmpWatermark) Error() string {
@@ -177,8 +177,8 @@ func (e *errCodeSizeTooLarge) Error() string {
 }
 
 type errRelayParentTooOld struct {
-	minAllowed uint
-	current    uint
+	minAllowed parachaintypes.BlockNumber
+	current    parachaintypes.BlockNumber
 }
 
 func (e *errRelayParentTooOld) Error() string {
